@@ -1,8 +1,34 @@
-# laman
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
+    <img src=".github/assets/logo-light.svg" alt="laman" width="280">
+  </picture>
+</p>
+
+<p align="center">
+  A local PHP development environment for Windows: PHP, MariaDB and HTTPS <code>.test</code> sites, with nothing to configure.
+</p>
+
+<p align="center">
+  <a href="https://github.com/raditzfarhan/laman/releases/latest"><img src="https://img.shields.io/github/v/release/raditzfarhan/laman?label=release&color=E2583E" alt="Latest release"></a>
+  <a href="https://github.com/raditzfarhan/laman/actions/workflows/ci.yml"><img src="https://github.com/raditzfarhan/laman/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/raditzfarhan/laman/releases"><img src="https://img.shields.io/github/downloads/raditzfarhan/laman/total?color=14213D" alt="Downloads"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?logo=windows" alt="Windows 10 | 11">
+  <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/raditzfarhan/laman?logo=go" alt="Go version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/raditzfarhan/laman?color=14213D" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/dashboard-dark.png">
+    <img src=".github/assets/dashboard-light.png" alt="The laman dashboard: every service running, and the sites with their PHP versions and Node dev servers" width="900">
+  </picture>
+</p>
 
 A local PHP development environment for Windows, in the spirit of Laragon and Laravel Herd.
 One self-contained `laman.exe` has the [Caddy](https://caddyserver.com) web server built in,
 installs PHP and MariaDB, and serves every folder in `~/Sites` at `http(s)://<folder>.test`.
+*Laman* is Malay for courtyard, and *laman web* means website.
 
 ## Install
 
