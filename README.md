@@ -37,7 +37,7 @@ Download `laman-setup-<version>.exe` from the [latest release](https://github.co
 The setup program isn't code-signed yet, so Windows SmartScreen may say it "protected your PC": choose **More info → Run anyway**. Each release lists the SHA-256 of every file in `checksums.txt`.
 
 - **Updates:** the dashboard says when a new release is out (**Update now** on Home), or run `laman update`. laman checks GitHub once a day; set `"noUpdateCheck": true` in `config.json` to stop that. Click the version at the bottom of the dashboard's sidebar to check now.
-- **Uninstall:** Settings → Apps → laman. It stops laman, takes it off your PATH and out of sign-in, and removes its certificate authority from Windows. It then asks whether to delete your databases and installed PHP versions too (default: keep them). `*.test` lines stay in the hosts file.
+- **Uninstall:** Settings → Apps → laman. It stops laman, takes it and its Node off your PATH and out of sign-in, and removes its certificate authority from Windows. It then asks whether to delete your databases and installed PHP versions too (default: keep them). `*.test` lines stay in the hosts file.
 - **Without the setup program:** download `laman.exe` from the release and run `.\laman.exe setup`.
 - **From source:** Go 1.27+, then `go build -o laman.exe .` and `.\laman.exe setup`. Release builds: `.\scripts\build.ps1 -Version 1.2.3` (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) for the setup program). Pushing a `v1.2.3` tag builds and publishes the release on GitHub.
 
@@ -87,10 +87,10 @@ laman dev auto on|off [site]   # start it whenever laman starts
 ```
 
 - **On Home** each Node app shows its framework, **running · :3101** / **stopped** / **crashed**, **Start** / **Stop**, and **Output** (live output, plus **Start with laman**).
-- **The command** is the project's own `dev` script (else `serve`, else `start`), run with the package manager its lock file names (`pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lock` → bun, else npm). Quasar apps without a script run `quasar dev`; Express/Fastify/Koa servers without one run `node <main>`.
+- **The command** is the project's own `dev` script (else `serve`, else `start`), run with the project's package manager: the `packageManager` field in `package.json`, else the tool that filled `node_modules`, else the newest lock file (`pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `package-lock.json`), else npm. A stale lock file left by another tool doesn't win. Projects that really use bun need `laman install bun`; Start says so. Quasar apps without a script run `quasar dev`; Express/Fastify/Koa servers without one run `node <main>`.
 - **The port** is picked by laman (3100–3999) and passed as `--port` to Vite, Nuxt, Next, Astro, Quasar, Vue CLI and Angular, and as `$PORT` to everything. If a server prints a different `http://localhost:<port>`, laman follows that.
 - **No config changes needed:** the dev server sees its requests as coming for `localhost:<port>`, so Vite's and Nuxt's host check lets them through. The original name is in `X-Forwarded-Host`.
-- **Node version:** the project's `.nvmrc` / `.node-version` if that version is installed in laman, else laman's default Node, else whatever Node is on PATH.
+- **Node version:** the project's `.nvmrc` / `.node-version` if that version is installed in laman. Otherwise laman's default Node, unless `package.json` `engines.node` rules it out (`>=22.13`, `^20.19 || ^22`): then the newest installed version that fits. When none fits, the dev server's output says which range it wants and how to install one.
 - **While it's stopped**, the `.test` address explains that and links to **Start it in the dashboard**. The dashboard asks before starting anything; a link alone never runs a command. Once the server answers, that page turns into the app by itself. A crash shows the last lines of output there and on Home.
 - **Stopping** ends the whole process tree (npm → node → esbuild), so no stray process keeps the port. Dev servers stop with laman and are never restarted on their own.
 - **Install packages first:** laman doesn't run `npm install` for you; Start says so if `node_modules` is missing.
@@ -304,10 +304,11 @@ laman share setup off                          # back to random links
 
 laman can manage Node on its own, with no other Node or nvm needed. `laman setup` installs the current LTS.
 
-- **Installing:** `laman install node` installs the newest LTS. `laman install node 22` installs a major line, and `laman install node 22.11.0` an exact version. Each zip comes from nodejs.org and is checked against its SHASUMS256.txt.
+- **Installing:** `laman install node` installs the newest LTS. `laman install node 22` installs a major line, `laman install node 22.11.0` an exact version, and `laman install node ">=22.13"` the newest LTS in a range, as `engines` writes it. Each zip comes from nodejs.org and is checked against its SHASUMS256.txt.
 - **Plain `node` / `npm` / `npx`:** `~/.laman/node` is a junction (no admin needed) to the default version, and it's on your user PATH. That makes plain `node`, `npm`, `npx`, npm scripts, Vite and your IDE all use it. `laman use node 20` switches the default.
 - **Global tools:** `npm i -g` installs into `~/.laman/npm`, which is shared by every Node version and on PATH. Global tools keep working after a switch.
-- **Per project:** `laman node|npm|npx …` uses the version in the nearest `.nvmrc` or `.node-version`, else the default. Child processes, such as npm scripts, get the same Node.
+- **Per project:** `laman node|npm|npx …` uses the version in the nearest `.nvmrc` or `.node-version`, else the default (or, when `package.json` `engines.node` rules that out, the newest installed version that fits). Child processes, such as npm scripts, get the same Node.
+- **bun:** `laman install bun` installs the newest bun from its GitHub release, checked against the SHA-256 GitHub records. Dev servers find it first on their PATH, and `laman bun|bunx …` runs it in a terminal.
 - **Existing installs:** if another Node or nvm comes earlier on PATH, plain `node` keeps running that one, and laman tells you which. Uninstall it, or remove it from PATH, to hand Node over to laman.
 
 ## Branding
@@ -342,7 +343,8 @@ The icon, tray mark and dashboard colours come from `../logo/kit` (see its `USAG
 | `laman dev [start\|stop\|log] [site]` / `dev auto on\|off [site]` | Run a Node app's dev server behind its `.test` name (see [JavaScript apps](#javascript-apps-dev-servers)) |
 | `laman proxy <name> <port>` / `proxy remove <name>` / `proxy` | Serve `<name>.test` from a port on this computer |
 | `laman install node [22]` / `laman use node 22` | Install Node.js (newest LTS by default) and set the default behind plain `node`/`npm`/`npx` |
-| `laman node\|npm\|npx [args]` | Run with the project's `.nvmrc` / `.node-version` Node, else the default |
+| `laman node\|npm\|npx [args]` | Run with the project's Node: `.nvmrc` / `.node-version`, else `engines.node`, else the default |
+| `laman install bun` / `laman bun\|bunx [args]` | Install bun for projects that use it, and run it |
 | `laman start` / `stop` / `restart` / `status` | Control the background daemon |
 | `laman sites` | List sites, URLs and document roots |
 | `laman folders` / `folders add [path]` / `folders remove [path]` / `folders prefix <prefix> [path]` | Project folders: every folder inside one is a site (see [Project folders](#project-folders)) |
@@ -355,7 +357,7 @@ The icon, tray mark and dashboard colours come from `../logo/kit` (see its `USAG
 | `laman self-install` | Copy this laman.exe to `~/.laman/bin` and add that folder to your user PATH (also run by `setup`; rerun after rebuilding) |
 | `laman update [--check]` | Install the newest release (checksum-verified); `--check` only says whether there is one |
 | `laman version` | Print laman's version (`dev` for a local build) |
-| `laman self-uninstall` | Stop laman and remove it from PATH, sign-in and the Windows certificate store; your data stays |
+| `laman self-uninstall` | Stop laman and remove it (and its Node) from PATH, sign-in and the Windows certificate store; your data stays |
 
 ## How it works
 

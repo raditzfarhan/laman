@@ -27,17 +27,39 @@ func cmdNode(tool string, args []string) error {
 	if err != nil {
 		return err
 	}
+	isBun := tool == "bun" || tool == "bunx"
+	bun := install.BunDir()
+	if isBun && bun == "" {
+		return errors.New("bun is not installed; run `laman install bun`")
+	}
 	dir := install.NodeDir(v)
-	if dir == "" {
+	if dir == "" && !isBun { // bun runs without Node
 		if from != "" {
 			return fmt.Errorf("%s asks for Node %s, which is not installed; run `laman install node %s`", from, v, v)
 		}
 		return errors.New("no Node installed; run `laman install node`")
 	}
-	// Child processes (npm scripts, Vite) find the same node first.
-	os.Setenv("PATH", dir+";"+install.NpmPrefix()+";"+os.Getenv("PATH"))
+	if cwd, err := os.Getwd(); err == nil && from == "" && dir != "" {
+		if msg := config.NodeMismatch(cwd, v); msg != "" {
+			fmt.Fprintln(os.Stderr, "laman: "+msg)
+		}
+	}
+	// Child processes (npm scripts, Vite) find the same node and bun first.
+	path := os.Getenv("PATH")
+	if dir != "" {
+		path = dir + ";" + install.NpmPrefix() + ";" + path
+	}
+	if bun != "" {
+		path = bun + ";" + path
+	}
+	os.Setenv("PATH", path)
 	node := filepath.Join(dir, "node.exe")
 	switch tool {
+	case "bun", "bunx":
+		if tool == "bunx" {
+			args = append([]string{"x"}, args...)
+		}
+		return runPassthrough(filepath.Join(bun, "bun.exe"), args...)
 	case "npm":
 		args = append([]string{filepath.Join(dir, "node_modules", "npm", "bin", "npm-cli.js")}, args...)
 	case "npx":

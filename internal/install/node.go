@@ -71,6 +71,9 @@ func Node(want string) (string, error) {
 
 func pickNode(index []nodeRelease, want string) (nodeRelease, error) {
 	want = strings.TrimPrefix(strings.TrimSpace(want), "v")
+	if isRange(want) {
+		return pickNodeRange(index, want)
+	}
 	for _, r := range index { // index.json is newest first
 		if !nodeVersion.MatchString(r.Version) || !hasFile(r.Files, "win-x64-zip") {
 			continue
@@ -91,6 +94,37 @@ func pickNode(index []nodeRelease, want string) (nodeRelease, error) {
 		return nodeRelease{}, fmt.Errorf("nodejs.org lists no LTS release for Windows x64")
 	}
 	return nodeRelease{}, fmt.Errorf("no Node release matches %q on nodejs.org", want)
+}
+
+// isRange tells a package.json range (">=22.13", "^20 || ^22") from a
+// version or line ("22", "22.13.0") and the words lts/latest/current.
+func isRange(s string) bool { return strings.ContainsAny(s, "<>=^~|xX* ") }
+
+// pickNodeRange: the newest LTS release in the range, else the newest one.
+func pickNodeRange(index []nodeRelease, rng string) (nodeRelease, error) {
+	var newest *nodeRelease
+	for i, r := range index {
+		if !nodeVersion.MatchString(r.Version) || !hasFile(r.Files, "win-x64-zip") {
+			continue
+		}
+		in, ok := config.InRange(strings.TrimPrefix(r.Version, "v"), rng)
+		if !ok {
+			return nodeRelease{}, fmt.Errorf("laman can't read the Node range %q", rng)
+		}
+		if !in {
+			continue
+		}
+		if r.isLTS() {
+			return r, nil
+		}
+		if newest == nil {
+			newest = &index[i]
+		}
+	}
+	if newest != nil {
+		return *newest, nil
+	}
+	return nodeRelease{}, fmt.Errorf("no Node release on nodejs.org fits %q", rng)
 }
 
 func hasFile(files []string, f string) bool {

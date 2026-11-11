@@ -138,8 +138,12 @@ func (d *daemon) startDev(host string) error {
 	if site.Kind != sites.KindNode || site.DevCmd == "" {
 		return fmt.Errorf("%s is not a Node app with a dev server", site.Host)
 	}
+	pm := sites.PackageManager(site.Path)
 	if !exists(filepath.Join(site.Path, "node_modules")) {
-		return fmt.Errorf("%s has no node_modules yet: run `%s install` in %s first", site.Host, sites.PackageManager(site.Path), site.Path)
+		return fmt.Errorf("%s has no node_modules yet: run `%s install` in %s first", site.Host, pm, site.Path)
+	}
+	if strings.HasPrefix(site.DevCmd, "bun ") && !install.HaveBun() {
+		return fmt.Errorf("%s uses bun, which is not installed: run `laman install bun`", site.Host)
 	}
 	d.mu.Lock()
 	if d.devs == nil {
@@ -180,6 +184,14 @@ func (d *daemon) startDev(host string) error {
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	fmt.Fprintf(out, "[laman %s] %s> %s\n", time.Now().Format(time.RFC3339), site.Path, line)
+	if cfg, err := config.Load(); err == nil {
+		if v, from := cfg.NodeFor(site.Path); from != "" {
+			fmt.Fprintf(out, "[laman] Node %s (from %s)\n", v, from)
+		} else if msg := config.NodeMismatch(site.Path, v); msg != "" {
+			fmt.Fprintf(out, "[laman] %s\n", msg)
+			s.addLine("[laman] " + msg)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		out.Close()
 		pw.Close()
@@ -435,6 +447,9 @@ func devEnv(dir string, port int) []string {
 		if nodeDir != "" {
 			path = nodeDir + ";" + install.NpmPrefix() + ";" + path
 		}
+	}
+	if bun := install.BunDir(); bun != "" {
+		path = bun + ";" + path
 	}
 	return append(env, "PATH="+path, "PORT="+strconv.Itoa(port), "BROWSER=none", "FORCE_COLOR=0", "NO_COLOR=1")
 }

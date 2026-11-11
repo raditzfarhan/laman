@@ -548,12 +548,14 @@ func (c *Config) SetEnabled(kind string, on bool) {
 
 func NodeLink() string { return filepath.Join(Home(), "node") }
 
-// DefaultNode is the configured Node version, or the newest installed one.
 // NodeFor picks the Node version for a folder: the nearest .nvmrc or
-// .node-version above it, else the default. from names the file used; a
-// version it asks for may not be installed.
+// .node-version above it; else, when package.json's engines.node rules out
+// the default, the newest installed version it allows; else the default.
+// from names the file used; a version an .nvmrc asks for may not be
+// installed.
 func (c *Config) NodeFor(dir string) (version, from string) {
 	def := c.DefaultNode()
+	start := dir
 	for ; ; dir = filepath.Dir(dir) {
 		for _, name := range []string{".nvmrc", ".node-version"} {
 			b, err := os.ReadFile(filepath.Join(dir, name))
@@ -570,10 +572,41 @@ func (c *Config) NodeFor(dir string) (version, from string) {
 			return want, filepath.Join(dir, name)
 		}
 		if parent := filepath.Dir(dir); parent == dir {
-			return def, ""
+			break
 		}
 	}
+	rng, pkg := NodeEngines(start)
+	if in, _ := InRange(def, rng); in || def == "" {
+		return def, ""
+	}
+	if v := newestInRange("node", rng); v != "" {
+		return v, pkg
+	}
+	return def, ""
 }
+
+// NodeMismatch explains when version v is outside the folder's
+// package.json engines.node, else "".
+func NodeMismatch(dir, v string) string {
+	rng, pkg := NodeEngines(dir)
+	if in, _ := InRange(v, rng); in || v == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s asks for Node %s and no installed version fits, so it runs on %s. "+
+		"Install one with `laman install node \"%s\"`", pkg, rng, v, rng)
+}
+
+func newestInRange(kind, rng string) string {
+	v := Installed(kind)
+	for i := len(v) - 1; i >= 0; i-- {
+		if in, ok := InRange(v[i], rng); in && ok {
+			return v[i]
+		}
+	}
+	return ""
+}
+
+// DefaultNode is the configured Node version, or the newest installed one.
 
 // NodeSpec reads a version file's first line: "v20.11.0" -> "20.11.0",
 // "20" -> "20". Aliases (lts/*, node, stable) return "".

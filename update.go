@@ -7,9 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"laman/internal/config"
 	"laman/internal/desktop"
+	"laman/internal/install"
 	"laman/internal/update"
 	"laman/internal/version"
 )
@@ -111,17 +114,24 @@ func cmdSelfUninstall(args []string) error {
 			return err
 		}
 	}
-	if desktop.TrayRunning() {
-		desktop.StopTray()
+	tray := desktop.WindowedPath(installedExe())
+	if err := desktop.StopTrayAt(tray); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not close the tray icon: %v\n", err)
 	}
-	if err := desktop.SetStartup(false, ""); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not remove the sign-in entry: %v\n", err)
+	// Only this install's sign-in entry: another laman (a second
+	// LAMAN_HOME) may own it.
+	if strings.EqualFold(filepath.Clean(desktop.StartupExe()), filepath.Clean(tray)) {
+		if err := desktop.SetStartup(false, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove the sign-in entry: %v\n", err)
+		}
 	}
 	bin := filepath.Dir(installedExe())
-	if removed, err := removeFromUserPath(bin); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not take %s off your PATH: %v\n", bin, err)
-	} else if removed {
-		fmt.Printf("Removed %s from your PATH.\n", bin)
+	for _, dir := range []string{bin, config.NodeLink(), install.NpmPrefix()} {
+		if removed, err := removeFromUserPath(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not take %s off your PATH: %v\n", dir, err)
+		} else if removed {
+			fmt.Printf("Removed %s from your PATH.\n", dir)
+		}
 	}
 	if err := cmdUntrust(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not remove laman's CA: %v\n", err)

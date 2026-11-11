@@ -42,9 +42,9 @@ func cmdSelfInstall() error {
 			}
 		}
 		// The tray runs lamanw.exe, which is rewritten below.
-		trayWasRunning := desktop.TrayRunning()
+		trayWasRunning := desktop.TrayRunningAt(desktop.WindowedPath(dest))
 		if trayWasRunning {
-			desktop.StopTray()
+			desktop.StopTrayAt(desktop.WindowedPath(dest))
 		}
 		if err := copyFile(src, dest); err != nil {
 			return fmt.Errorf("install %s: %w (is a `laman` command still running?)", dest, err)

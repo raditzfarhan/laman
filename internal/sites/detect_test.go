@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, body string) {
@@ -55,5 +56,37 @@ func TestDetect(t *testing.T) {
 	}
 	if got := SubProjects(at("group")); len(got) != 2 {
 		t.Errorf("SubProjects: %v", got)
+	}
+}
+
+func TestPackageManager(t *testing.T) {
+	dir := t.TempDir()
+	at := func(p string) string { return filepath.Join(dir, p) }
+	old := time.Now().Add(-time.Hour)
+
+	write(t, at(`plain\package.json`), `{}`)
+	// packageManager field wins over lock files.
+	write(t, at(`field\package.json`), `{"packageManager":"pnpm@9.1.0"}`)
+	write(t, at(`field\package-lock.json`), `{}`)
+	// A stale bun lock next to node_modules that npm filled.
+	write(t, at(`mixed\package.json`), `{}`)
+	write(t, at(`mixed\bun.lockb`), ``)
+	write(t, at(`mixed\package-lock.json`), `{}`)
+	write(t, at(`mixed\node_modules\.package-lock.json`), `{}`)
+	// Not installed yet: the newest lock file.
+	write(t, at(`locks\package.json`), `{}`)
+	write(t, at(`locks\package-lock.json`), `{}`)
+	write(t, at(`locks\yarn.lock`), ``)
+	os.Chtimes(at(`locks\package-lock.json`), old, old)
+	write(t, at(`pnpmmods\package.json`), `{}`)
+	write(t, at(`pnpmmods\node_modules\.modules.yaml`), ``)
+	write(t, at(`bun\package.json`), `{}`)
+	write(t, at(`bun\bun.lock`), ``)
+
+	want := map[string]string{"plain": "npm", "field": "pnpm", "mixed": "npm", "locks": "yarn", "pnpmmods": "pnpm", "bun": "bun"}
+	for name, exp := range want {
+		if got := PackageManager(at(name)); got != exp {
+			t.Errorf("PackageManager(%s) = %s, want %s", name, got, exp)
+		}
 	}
 }

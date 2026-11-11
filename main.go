@@ -59,9 +59,11 @@ Usage:
   laman install postgres [17]     install PostgreSQL (newest when omitted)
   laman psql [args]               run psql against laman's PostgreSQL
   laman redis [args]              run redis-cli against laman's Redis
-  laman install node [22]         install Node.js (newest LTS when omitted)
+  laman install node [22]         install Node.js (newest LTS when omitted; also ranges like ">=22.13")
   laman use node <22>             set the default Node (plain node/npm/npx in new terminals)
-  laman node|npm|npx [args]       run with the Node from the project's .nvmrc, else the default
+  laman node|npm|npx [args]       run with the project's Node (.nvmrc, else package.json engines, else the default)
+  laman install bun               install bun, for projects that use it
+  laman bun|bunx [args]           run laman's bun with the project's Node on PATH
 
   laman start | stop | restart    run or stop the background services
   laman status                    show services and sites
@@ -174,7 +176,7 @@ func main() {
 		err = cmdEnable(args, cmd == "enable")
 	case "upgrade":
 		err = cmdUpgrade(args)
-	case "node", "npm", "npx":
+	case "node", "npm", "npx", "bun", "bunx":
 		err = cmdNode(cmd, args)
 	case "trust":
 		err = cmdTrust(args)
@@ -265,7 +267,7 @@ Done. Next (in a new terminal):
 
 func cmdInstall(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: laman install php|mariadb|postgres|node|composer|mailpit|redis [version]")
+		return errors.New("usage: laman install php|mariadb|postgres|node|bun|composer|mailpit|redis [version]")
 	}
 	want := ""
 	if len(args) > 1 {
@@ -308,10 +310,14 @@ func cmdInstall(args []string) error {
 		if v != cfg.Node {
 			fmt.Printf("Run `laman use node %s` to make it the default, or put %s in a project's .nvmrc.\n", v, strings.SplitN(v, ".", 2)[0])
 		}
+	case "bun":
+		if _, err = install.Bun(); err == nil {
+			fmt.Println("Dev servers of bun projects use it now; `laman bun` runs it here.")
+		}
 	case "nginx", "caddy":
 		fmt.Println("Nothing to install: laman has Caddy built in as its web server.")
 	default:
-		return fmt.Errorf("unknown component %q (php, mariadb, postgres, node, composer, mailpit, redis)", args[0])
+		return fmt.Errorf("unknown component %q (php, mariadb, postgres, node, bun, composer, mailpit, redis)", args[0])
 	}
 	return err
 }

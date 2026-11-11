@@ -109,17 +109,43 @@ func nodeApp(dir string) (framework, cmd string, ok bool) {
 	return "", "", false
 }
 
-// PackageManager guesses npm, pnpm, yarn or bun from the lock file.
+// PackageManager works out npm, pnpm, yarn or bun for a project: the
+// "packageManager" field in package.json, else the tool that filled
+// node_modules, else the newest lock file, else npm. Projects often carry a
+// stale lock file from another tool, so the lock file comes last.
 func PackageManager(dir string) string {
-	switch {
-	case exists(filepath.Join(dir, "pnpm-lock.yaml")):
-		return "pnpm"
-	case exists(filepath.Join(dir, "yarn.lock")):
-		return "yarn"
-	case exists(filepath.Join(dir, "bun.lockb")), exists(filepath.Join(dir, "bun.lock")):
-		return "bun"
+	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+		var pkg struct {
+			PackageManager string `json:"packageManager"`
+		}
+		if json.Unmarshal(b, &pkg) == nil {
+			name, _, _ := strings.Cut(pkg.PackageManager, "@")
+			switch name = strings.TrimSpace(name); name {
+			case "npm", "pnpm", "yarn", "bun":
+				return name
+			}
+		}
 	}
-	return "npm"
+	nm := filepath.Join(dir, "node_modules")
+	for _, m := range []struct{ file, pm string }{
+		{".modules.yaml", "pnpm"}, {".pnpm", "pnpm"},
+		{".yarn-integrity", "yarn"}, {".yarn-state.yml", "yarn"},
+		{".package-lock.json", "npm"},
+	} {
+		if exists(filepath.Join(nm, m.file)) {
+			return m.pm
+		}
+	}
+	best, bestTime := "npm", int64(0)
+	for _, l := range []struct{ file, pm string }{
+		{"pnpm-lock.yaml", "pnpm"}, {"yarn.lock", "yarn"}, {"bun.lock", "bun"},
+		{"bun.lockb", "bun"}, {"package-lock.json", "npm"},
+	} {
+		if st, err := os.Stat(filepath.Join(dir, l.file)); err == nil && st.ModTime().UnixNano() > bestTime {
+			best, bestTime = l.pm, st.ModTime().UnixNano()
+		}
+	}
+	return best
 }
 
 // SubProjects lists the folders inside dir that are projects of their own

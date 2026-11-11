@@ -148,10 +148,75 @@ func TrayRunning() bool {
 	return err == nil && strings.Contains(strings.ToLower(string(out)), WindowedName)
 }
 
-// StopTray ends any running tray so its executable can be replaced.
-func StopTray() error {
-	_, err := RunHidden("taskkill", "/IM", WindowedName, "/F")
-	return err
+// TrayRunningAt reports whether a tray started from exe (a lamanw.exe path)
+// is running. Another laman install's tray doesn't count.
+func TrayRunningAt(exe string) bool { return len(processesAt(exe)) > 0 }
+
+// StopTrayAt ends the trays started from exe, so it can be replaced or
+// removed. Trays of other laman installs keep running.
+func StopTrayAt(exe string) error {
+	var errs []error
+	for _, pid := range processesAt(exe) {
+		h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, pid)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := windows.TerminateProcess(h, 1); err != nil {
+			errs = append(errs, err)
+		} else {
+			windows.WaitForSingleObject(h, 5000)
+		}
+		windows.CloseHandle(h)
+	}
+	return errors.Join(errs...)
+}
+
+// processesAt lists the processes whose executable is exe.
+func processesAt(exe string) []uint32 {
+	want, err := filepath.Abs(exe)
+	if err != nil {
+		return nil
+	}
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snap)
+	var pe windows.ProcessEntry32
+	pe.Size = uint32(unsafe.Sizeof(pe))
+	var out []uint32
+	for err = windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
+		if !strings.EqualFold(windows.UTF16ToString(pe.ExeFile[:]), filepath.Base(want)) {
+			continue
+		}
+		h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pe.ProcessID)
+		if err != nil {
+			continue
+		}
+		buf := make([]uint16, windows.MAX_LONG_PATH)
+		n := uint32(len(buf))
+		if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) == nil && strings.EqualFold(windows.UTF16ToString(buf[:n]), want) {
+			out = append(out, pe.ProcessID)
+		}
+		windows.CloseHandle(h)
+	}
+	return out
+}
+
+// StartupExe is the program the sign-in entry starts, or "" when there is
+// no entry.
+func StartupExe() string {
+	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	v, _, err := k.GetStringValue(runValue)
+	if err != nil {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(v), `"`)
 }
 
 // Home is the user's profile folder, for display.

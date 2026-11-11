@@ -32,3 +32,29 @@ func TestPickNode(t *testing.T) {
 		t.Error(`pickNode("2") should not match 26.x`)
 	}
 }
+
+func TestPickNodeRange(t *testing.T) {
+	win := []string{"win-x64-zip"}
+	index := []nodeRelease{
+		{"v27.1.0", false, win},
+		{"v26.13.0", "Lithium", win},
+		{"v24.11.0", "Krypton", win},
+		{"v23.5.0", false, win},
+		{"v22.20.0", "Jod", win},
+	}
+	cases := map[string]string{
+		">=22.13":    "v26.13.0", // newest LTS in range
+		"^22 || ^24": "v24.11.0",
+		"^23":        "v23.5.0", // no LTS fits: newest
+		"22.x":       "v22.20.0",
+	}
+	for rng, exp := range cases {
+		r, err := pickNode(index, rng)
+		if err != nil || r.Version != exp {
+			t.Errorf("pickNode(%q) = %v, %v; want %s", rng, r.Version, err, exp)
+		}
+	}
+	if _, err := pickNode(index, "^30"); err == nil {
+		t.Error("^30 should match nothing")
+	}
+}
