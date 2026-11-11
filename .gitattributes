@@ -1,0 +1,6 @@
+# Keep LF everywhere: gofmt expects it, and mixed endings break edits.
+* text=auto eol=lf
+
+*.syso binary
+*.ico binary
+*.png binary

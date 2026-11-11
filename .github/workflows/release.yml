@@ -1,0 +1,36 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish laman 0.2.0: tests, builds laman.exe and
+# the setup program, and attaches them with checksums.txt to a GitHub
+# release. `laman update` and the dashboard read that release.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build
+        shell: pwsh
+        run: ./scripts/build.ps1 -Version "${{ github.ref_name }}"
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          gh release create "${{ github.ref_name }}" --title "laman $v" --generate-notes `
+            dist/laman-setup-$v.exe dist/laman.exe dist/checksums.txt

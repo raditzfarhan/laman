@@ -1,0 +1,13 @@
+# Build output (rebuild with `go build -o laman.exe .`)
+*.exe
+*.exe~
+
+# Leftovers from interrupted copies and installs
+*.new
+*.tmp
+
+# Design-checker cache
+.impeccable/
+
+# Release builds (scripts/build.ps1)
+dist/
