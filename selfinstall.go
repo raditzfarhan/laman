@@ -13,6 +13,7 @@ import (
 
 	"laman/internal/config"
 	"laman/internal/desktop"
+	"laman/internal/version"
 )
 
 // installedExe is where self-install puts laman; its folder goes on PATH.
@@ -68,6 +69,10 @@ func cmdSelfInstall() error {
 		if _, err := desktop.EnsureWindowed(dest); err != nil {
 			return fmt.Errorf("install %s: %w", desktop.WindowedName, err)
 		}
+	}
+
+	if !version.Dev() {
+		syncSetupVersion(version.Version, config.Home())
 	}
 
 	added, err := addToUserPath(filepath.Dir(dest))

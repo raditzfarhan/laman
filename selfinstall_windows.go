@@ -96,3 +96,25 @@ func savedPathDirs() []string {
 	}
 	return out
 }
+
+// setupUninstallKey is the Apps & features entry the setup program
+// (installer/laman.iss, per-user) registers.
+const setupUninstallKey = `Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F1E5A4B-8C2D-4E7A-9B3F-2A1D0C9E8B71}_is1`
+
+// syncSetupVersion keeps that entry's version in step after `laman update`,
+// which installs without the setup program. No entry (a manual install, or
+// another LAMAN_HOME): nothing to do.
+func syncSetupVersion(v, home string) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, setupUninstallKey, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	// Only the install the setup program made: its icon is in this home.
+	icon, _, err := k.GetStringValue("DisplayIcon")
+	if err != nil || !strings.HasPrefix(strings.ToLower(icon), strings.ToLower(home)+`\`) {
+		return
+	}
+	k.SetStringValue("DisplayVersion", v)
+	k.SetStringValue("DisplayName", "laman")
+}
