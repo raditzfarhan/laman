@@ -720,6 +720,9 @@ func (d *daemon) status() Status {
 			st.Services = append(st.Services, h.svc.Status())
 		} else if !d.cfg.Enabled(kind) && installed(kind) {
 			st.Off = append(st.Off, kind)
+		} else if installed(kind) {
+			// Stopped from the dashboard (or its port was taken): on, not running.
+			st.Services = append(st.Services, ServiceStatus{Name: kind, State: "stopped"})
 		}
 	}
 	return st

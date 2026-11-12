@@ -373,6 +373,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .versions .pair { display: inline-flex; gap: 6px; align-items: center; }
 .versions .ver { font: 600 14px var(--mono); font-variant-numeric: tabular-nums; }
 tr.off td { color: var(--faint); }
+.comp { display: inline-flex; align-items: center; gap: 10px; }
+.comp svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+tr.off .comp svg { color: var(--faint); }
+.svc-acts { display: inline-flex; gap: 6px; }
+.svc-acts button { padding: 3px 10px; font-size: 13px; }
 tr.worker td { font-size: 13px; padding-top: 6px; padding-bottom: 6px; }
 tr.worker td:first-child { padding-left: 30px; }
 .job { margin: 12px 2px 0; min-height: 1.5em; color: var(--muted); }
@@ -541,11 +546,11 @@ body.down .view, body.down .notes { display: none; }
     <section class="view" data-view="services" hidden aria-labelledby="services-title">
       <div class="view-head">
         <div><h1 id="services-title">Services</h1>
-        <p>What laman is running right now. Switch a database or Mailpit off to leave it stopped, now and at every start.</p></div>
+        <p>What laman is running right now. Stop a server for now, or switch "Starts with laman" off to leave it stopped at every start too.</p></div>
       </div>
       <div class="panel scroll">
         <table>
-          <thead><tr><th>Service</th><th>State</th><th>Restarts</th><th>Uptime</th><th>Starts with laman</th></tr></thead>
+          <thead><tr><th>Service</th><th>State</th><th>Restarts</th><th>Uptime</th><th>Actions</th><th>Starts with laman</th></tr></thead>
           <tbody id="services"></tbody>
         </table>
       </div>

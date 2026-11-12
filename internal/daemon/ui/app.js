@@ -100,7 +100,7 @@ function render(force) {
 function draw(force) {
   if (force) drawn = {};
 
-  const problems = status.services.filter((s) => s.state !== "running");
+  const problems = status.services.filter((s) => s.state !== "running" && s.state !== "stopped");
   const httpsNag = status.httpsNote || (status.httpsPort > 0 && !status.httpsTrusted);
   const notesCount = (status.hostsStale ? 1 : 0) + (status.notes || []).length + (httpsNag ? 1 : 0);
   const warn = problems.length || notesCount;
@@ -186,7 +186,7 @@ function draw(force) {
   // Uptimes change every poll; redrawing for them would replace the
   // switches under the cursor, so they are updated in place instead.
   const shape = status.services.map(({ uptime, ...rest }) => rest);
-  if (changed("services", [shape, status.off, [...expanded]])) renderServices();
+  if (changed("services", [shape, status.off, [...expanded], svcBusy])) renderServices();
   for (const s of status.services) {
     const cell = document.querySelector(`[data-up="${s.name}"]`);
     if (cell && s.state === "running") cell.textContent = s.uptime || "";
@@ -504,7 +504,7 @@ function renderHome(problems, notesCount) {
   const item = (label, version, port, state, view) => el("li", { class: state === "off" ? "is-off" : "" },
     el("a", { href: "#" + view },
       el("span", { class: "k" }, brandIcon(MARK[label]), label,
-        el("span", { class: "dot " + (state === "running" ? "ok" : state === "off" || state === "none" ? "" : "warn"), title: state === "running" ? "running" : state })),
+        el("span", { class: "dot " + (state === "running" ? "ok" : state === "off" || state === "none" || state === "stopped" ? "" : "warn"), title: state === "running" ? "running" : state })),
       el("span", { class: "v" }, version),
       el("span", { class: "p" }, port)));
   const items = [
@@ -516,7 +516,7 @@ function renderHome(problems, notesCount) {
   const db = (label, kind, version, port) => {
     const st = stateOf(kind);
     if (st === "none" && !version) return;
-    items.push(item(label, st === "off" ? "off" : version || "—", st === "off" ? "turned off" : `:${port}`, st, "services"));
+    items.push(item(label, st === "off" ? "off" : version || "—", st === "off" ? "turned off" : st === "stopped" ? "stopped" : `:${port}`, st, "services"));
   };
   db("MariaDB", "mariadb", status.mariadb, status.mysqlPort);
   db("PostgreSQL", "postgres", status.postgres, status.postgresPort);
@@ -1067,15 +1067,44 @@ const stateDot = (state) => el("span", { class: "dot " + (state === "running" ? 
 
 const SERVICE_NAMES = { caddy: "Caddy (web)", mariadb: "MariaDB", postgres: "PostgreSQL", redis: "Redis", mailpit: "Mailpit" };
 const label = (name) => SERVICE_NAMES[name] || name;
+// Brand mark per component (versions and services tables, the rack).
+const KIND_MARK = { caddy: "caddy", php: "php", node: "node", mariadb: "mariadb", postgres: "postgres", redis: "redis", mailpit: "inbox" };
+const named = (kind, text) => el("span", { class: "comp" }, brandIcon(KIND_MARK[kind] || "inbox"), text);
+
+// Stop / Start / Restart one server. Stopping lasts until Start or the
+// next laman start; "Starts with laman" is the lasting switch.
+let svcBusy = {}; // kind (or "php8.5") -> true while a request runs
+async function controlService(key, body) {
+  svcBusy = { ...svcBusy, [key]: true };
+  render(true);
+  lastAct = Date.now();
+  try { await api("POST", "/api/services/control", body); } catch (e) { alertNote(e.message); }
+  const { [key]: _, ...rest } = svcBusy;
+  svcBusy = rest;
+  drawn = {};
+  await refresh();
+}
+function svcActions(key, body, state, name) {
+  const busy = svcBusy[key];
+  const b = (action, text, tip) => el("button", { disabled: !!busy, title: tip, "aria-label": `${text} ${name}`,
+    onclick: () => controlService(key, { ...body, action }) }, text);
+  if (busy) return el("span", { class: "svc-acts" }, el("span", { class: "muted" }, "Working…"));
+  if (state === "stopped") return el("span", { class: "svc-acts" }, b("start", "Start", `Start ${name}`));
+  const acts = [b("restart", "Restart", `Restart ${name}`)];
+  if (ADDONS.includes(body.kind)) acts.push(b("stop", "Stop", `Stop ${name} until you start it again or laman restarts`));
+  return el("span", { class: "svc-acts" }, acts);
+}
 
 function serviceRow(s, cls) {
+  const addon = ADDONS.includes(s.name);
   return el("tr", cls ? { class: cls } : {},
-    el("td", {}, cls === "worker" ? el("span", { class: "muted mono" }, s.name) : label(s.name)),
+    el("td", {}, cls === "worker" ? el("span", { class: "muted mono" }, s.name) : named(s.name, label(s.name))),
     el("td", {}, stateDot(s.state), s.state),
-    el("td", {}, String(s.restarts)),
+    el("td", {}, String(s.restarts ?? 0)),
     el("td", { class: s.lastError && s.state !== "running" ? "err" : "muted", "data-up": s.state === "running" ? s.name : undefined },
-      s.state === "running" ? s.uptime || "" : s.lastError || ""),
-    el("td", {}, ADDONS.includes(s.name) ? toggle(s.name, true) : null));
+      s.state === "running" ? s.uptime || "" : s.lastError || (s.state === "stopped" ? "until you start it" : "")),
+    el("td", {}, cls === "worker" ? null : svcActions(s.name, { kind: s.name }, s.state, label(s.name))),
+    el("td", {}, addon ? toggle(s.name, true) : null));
 }
 
 // PHP runs as several php-cgi workers per version (each serves one request
@@ -1103,19 +1132,21 @@ function renderServices() {
       onclick: () => { open ? expanded.delete(m[1]) : expanded.add(m[1]); render(); } },
       `${open ? "▾" : "▸"} ${ws.length} worker${ws.length > 1 ? "s" : ""}`);
     rows.push(el("tr", {},
-      el("td", {}, `PHP ${m[1]}`),
+      el("td", {}, named("php", `PHP ${m[1]}`)),
       el("td", {}, stateDot(up === ws.length ? "running" : "warn"), up === ws.length ? "running" : `${up} of ${ws.length} running`),
       el("td", {}, String(ws.reduce((n, w) => n + w.restarts, 0))),
       el("td", { class: failing ? "err" : "muted" }, failing ? failing.lastError : btn),
-      el("td", {}, failing ? btn : null)));
+      el("td", {}, svcActions(`php${m[1]}`, { kind: "php", version: m[1] }, "running", `PHP ${m[1]}`), failing ? btn : null),
+      el("td")));
     if (open) for (const w of ws) rows.push(serviceRow(w, "worker"));
   }
   for (const kind of status.off || []) {
     rows.push(el("tr", { class: "off" },
-      el("td", {}, label(kind)),
+      el("td", {}, named(kind, label(kind))),
       el("td", {}, stateDot("off"), "off"),
       el("td", {}, "-"),
       el("td", {}, "turned off"),
+      el("td"),
       el("td", {}, toggle(kind, false))));
   }
   $("services").replaceChildren(...rows);
@@ -1191,7 +1222,7 @@ function renderVersions() {
     }
 
     return el("tr", {},
-      el("td", {}, el("strong", {}, v.name)),
+      el("td", {}, named(v.kind, el("strong", {}, v.name))),
       el("td", {}, v.active ? el("span", { class: "ver" }, short(v.active)) : null, state),
       use, add, up);
   }));

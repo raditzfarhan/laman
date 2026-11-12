@@ -123,6 +123,7 @@ func (d *daemon) dashboardRoutes(mux *http.ServeMux) {
 	d.shareSetupRoutes(mux)
 	d.folderRoutes(mux)
 	d.editorRoutes(mux)
+	d.serviceControlRoutes(mux)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
