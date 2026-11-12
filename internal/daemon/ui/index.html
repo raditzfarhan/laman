@@ -120,7 +120,9 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 /* Flex, not grid: a short last row shares its width instead of leaving holes. */
 .rack { list-style: none; margin: 0 0 30px; padding: 0; display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
 .rack li { flex: 1 1 150px; padding: 12px 16px 13px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; min-width: 0; }
-.rack .k { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.rack .k { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.rack .k svg { width: 15px; height: 15px; flex: none; }
+.rack .k .dot { margin-left: auto; }
 .rack .v { display: block; margin-top: 3px; font: 600 16px/1.3 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rack .p { display: block; font: 12px var(--mono); color: var(--faint); }
 .rack li.is-off .v { color: var(--faint); font-weight: 500; }
@@ -141,8 +143,14 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 /* Folder and editor: icon buttons beside Open */
 .site .ends { display: inline-flex; align-items: center; gap: 2px; justify-self: end; }
 .site .icon { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); }
-.site .icon:hover:not(:disabled) { color: var(--ink); background: var(--code); }
-.site .icon svg { width: 16px; height: 16px; }
+.site .icon:hover:not(:disabled) { color: var(--ink); background: var(--code); border-color: transparent; }
+.site .icon svg { width: 18px; height: 18px; }
+.site .icon.more { width: 18px; margin-left: -4px; }
+.site .icon.more svg { width: 14px; height: 14px; }
+.site .icon.on, .site .icon.on:disabled { color: var(--genting); opacity: 1; cursor: default; }
+.site .icon.busy svg { animation: spin .8s linear infinite; }
+.site .sharegrp { display: inline-flex; align-items: center; }
+.site .sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
 .editor-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 0; }
 .editor-pick label { display: flex; align-items: center; gap: 10px; }
 .site .sharebtn { background: none; border-color: transparent; color: var(--muted); font-size: 13px; padding: 5px 8px; }
@@ -407,7 +415,7 @@ body.down .view, body.down .notes { display: none; }
   .hero { padding: 22px 20px 20px; }
   .prompt { font-size: 22px; gap: 10px; }
   .site { grid-template-columns: minmax(0, 1fr) auto; }
-  .site .open, .site .sharegrp { display: none; }
+  .site .open, .site .sharegrp, .site .sep { display: none; }
   .view-head .tools { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
