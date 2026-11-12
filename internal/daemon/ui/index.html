@@ -10,10 +10,10 @@
 /* Brand from logo/kit: Malam #14213D (the frame), Pasir #F4EDE1 (the ground),
    Genting #E2583E (the cursor: graphics and focus only, never text). */
 :root {
-  --bg: #f4ede1; --panel: #ffffff; --ink: #14213d; --muted: #5a6275; --faint: #8a90a0; --line: #e4dccd; --line-strong: #d3c9b6;
+  --bg: #f4ede1; --panel: #ffffff; --ink: #14213d; --muted: #5a6275; --faint: #656b7c; --line: #e4dccd; --line-strong: #d3c9b6; --field: #8f8676;
   --rail: #14213d; --rail-ink: #f4ede1; --rail-muted: #aab1c2; --rail-hover: rgba(244, 237, 225, .07); --rail-active: rgba(244, 237, 225, .12);
   --accent: #14213d; --accent-ink: #f4ede1; --genting: #e2583e;
-  --warn: #8a5300; --warn-bg: #fbecd2; --bad: #b3261e; --bad-bg: #fbe3e0; --ok: #1a8f62; --off: #a2a7b1; --code: #f7f2e9;
+  --warn: #8a5300; --warn-bg: #fbecd2; --bad: #b3261e; --bad-bg: #fbe3e0; --ok: #1a8f62; --off: #878c96; --code: #f7f2e9;
   --lattice: rgba(20, 33, 61, .06);
   --radius: 10px; --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace;
   --ease: cubic-bezier(.22, 1, .36, 1);
@@ -22,7 +22,7 @@
 /* Dark: follows the system unless the toggle picked a side (data-theme). */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0e172b; --panel: #14213d; --ink: #f4ede1; --muted: #aab1c2; --faint: #7d859a; --line: #24324f; --line-strong: #33436a;
+    --bg: #0e172b; --panel: #14213d; --ink: #f4ede1; --muted: #aab1c2; --faint: #8a92a6; --line: #24324f; --line-strong: #33436a; --field: #6a7aa0;
     --rail: #0a1120; --rail-hover: rgba(244, 237, 225, .06); --rail-active: rgba(244, 237, 225, .1);
     --accent: #f4ede1; --accent-ink: #14213d;
     --warn: #f2c06b; --warn-bg: #2b2616; --bad: #f2928a; --bad-bg: #331c22; --ok: #3cc48f; --off: #5d6680; --code: #101a31;
@@ -31,7 +31,7 @@
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0e172b; --panel: #14213d; --ink: #f4ede1; --muted: #aab1c2; --faint: #7d859a; --line: #24324f; --line-strong: #33436a;
+  --bg: #0e172b; --panel: #14213d; --ink: #f4ede1; --muted: #aab1c2; --faint: #8a92a6; --line: #24324f; --line-strong: #33436a; --field: #6a7aa0;
   --rail: #0a1120; --rail-hover: rgba(244, 237, 225, .06); --rail-active: rgba(244, 237, 225, .1);
   --accent: #f4ede1; --accent-ink: #14213d;
   --warn: #f2c06b; --warn-bg: #2b2616; --bad: #f2928a; --bad-bg: #331c22; --ok: #3cc48f; --off: #5d6680; --code: #101a31;
@@ -43,6 +43,8 @@ html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 :focus-visible { outline: 2px solid var(--genting); outline-offset: 2px; }
 .mono { font-family: var(--mono); }
+.skip { position: absolute; left: 12px; top: -48px; z-index: 40; padding: 8px 14px; border-radius: 8px; background: var(--panel); color: var(--ink); border: 1px solid var(--field); text-decoration: none; }
+.skip:focus { top: 12px; }
 .muted { color: var(--muted); }
 .err { color: var(--bad); }
 
@@ -58,17 +60,21 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 "Sego
 .nav a[aria-current="page"] { background: var(--rail-active); color: var(--rail-ink); }
 .nav a[aria-current="page"]::before { background: var(--genting); }
 .nav .count { margin-left: auto; font: 12px var(--mono); color: var(--rail-muted); }
+.nav .count.bad { color: #14213d; background: #f2928a; border-radius: 999px; padding: 0 7px; font-weight: 600; }
 .rail-foot { margin-top: auto; display: grid; gap: 10px; padding: 12px 8px 0; border-top: 1px solid rgba(244, 237, 225, .1); }
 .rail-state { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--rail-ink); min-width: 0; }
 .rail-state span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-state #state { flex: 1; }
-.ver { flex: none; border: 0; background: none; padding: 0; font: 12px var(--mono); color: var(--rail-ink); opacity: .7; }
-.ver:hover:not(:disabled) { opacity: 1; text-decoration: underline; }
-.ver:disabled { cursor: default; }
-.ver.new { opacity: 1; color: var(--genting); }
+.rail-state .ver { flex: none; border: 0; background: none; padding: 0; font: 12px var(--mono); color: var(--rail-ink); opacity: .7; }
+.rail-state .ver:hover:not(:disabled) { opacity: 1; text-decoration: underline; }
+.rail-state .ver:disabled { cursor: default; }
+.rail-state .ver.new { opacity: 1; color: var(--genting); }
 .rail-actions { display: flex; gap: 6px; }
 .rail-actions button { flex: 1; background: transparent; color: var(--rail-ink); border-color: rgba(244, 237, 225, .22); }
 .rail-actions button:hover:not(:disabled) { background: var(--rail-hover); border-color: rgba(244, 237, 225, .4); }
+.rail-actions #stop { flex: none; border-color: transparent; color: var(--rail-muted); }
+.rail-actions #stop:hover:not(:disabled) { color: var(--rail-ink); }
+.rail-actions #stop.confirm { flex: 1; background: #f2c06b; color: #14213d; border-color: #f2c06b; font-weight: 600; }
 .theme { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; border: 1px solid rgba(244, 237, 225, .16); border-radius: 8px; }
 .theme button { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 4px 6px; font-size: 12px; font-weight: 500; color: var(--rail-muted); background: transparent; border: 0; border-radius: 6px; cursor: pointer; transition: background .15s var(--ease), color .15s var(--ease); }
 .theme button svg { width: 13px; height: 13px; flex: none; }
@@ -122,6 +128,7 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .rack a:hover .v { text-decoration: underline; text-decoration-color: var(--genting); text-underline-offset: 3px; }
 
 .sect-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
+.sect-head.sticky { position: sticky; top: 0; z-index: 3; margin: 0; padding: 12px 0 10px; background: var(--bg); align-items: center; }
 .sect-head .hint { margin-left: auto; font-size: 13px; color: var(--muted); }
 .sites { display: grid; }
 .site { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
@@ -185,6 +192,7 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 @media (max-width: 860px) { .app { grid-template-columns: 1fr; } .app .actions { justify-content: flex-start; } }
 
 /* ---- Project folders ---- */
+.folders-intro { margin: 0 0 12px; color: var(--muted); max-width: 72ch; }
 .folder { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
 .folder:last-child { border-bottom: 0; }
 .folder .fpath { min-width: 0; display: flex; align-items: center; gap: 4px; }
@@ -264,6 +272,8 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .why-group { grid-column: 1 / -1; display: grid; gap: 6px; }
 .why-group + .why-group { margin-top: 6px; }
 .qtotals .stat span { font-size: 11px; color: var(--muted); }
+.qtotals .qcap { align-self: center; font-size: 12px; color: var(--muted); padding-right: 4px; }
+.queue .qsite .qn { font: 500 14px var(--mono); color: var(--muted); }
 .qempty { padding: 26px 22px; display: grid; gap: 12px; }
 .qempty h3 { margin: 0; font-size: 16px; font-weight: 650; }
 .qempty p { margin: 0; color: var(--muted); max-width: 64ch; }
@@ -317,6 +327,7 @@ code { font-family: var(--mono); font-size: .92em; background: var(--code); padd
 button, select, a.btn, input[type=search] { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; padding: 5px 11px; }
 button, select, a.btn { cursor: pointer; transition: border-color .15s var(--ease), background .15s var(--ease); }
 button:hover:not(:disabled), select:hover:not(:disabled), a.btn:hover { border-color: var(--muted); }
+select, input[type=search], input[type=text] { border-color: var(--field); }
 button:active:not(:disabled) { transform: translateY(1px); }
 button.primary, a.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 button:disabled, select:disabled { opacity: .5; cursor: default; }
@@ -398,11 +409,13 @@ body.down .view, body.down .notes { display: none; }
 </style>
 </head>
 <body>
+<a class="skip" href="#home" id="skip">Skip to content</a>
 <div class="shell">
   <aside class="rail">
     <a class="brand" href="#home" aria-label="laman home"><svg class="lockup" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 835 256" aria-hidden="true" focusable="false"><path fill="currentColor" d="M37.01 166.48L150.51 52.97L135.50 37.97L22.00 151.47ZM105.49 52.97L218.99 166.48L234.00 151.47L120.50 37.97ZM120.50 128.00L158.01 165.51L120.50 203.03L135.50 218.03L188.02 165.51L135.50 112.99Z"/><rect x="198.63" y="196.81" width="35.37" height="21.22" fill="#E2583E"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M0.0 0H21.0V-142L0.0 -121Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" fill-rule="evenodd" d="M37.0 -48A48 48 0 1 0 133.0 -48A48 48 0 1 0 37.0 -48ZM58.0 -48A27 27 0 1 0 112.0 -48A27 27 0 1 0 58.0 -48Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M112.0 0H133.0V-96H112.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M153.0 0H174.0V-96H153.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M153.0 0V-53A43 43 0 0 1 239.0 -53V0H218.0V-53A22 22 0 0 0 174.0 -53V0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M218.0 0V-53A43 43 0 0 1 304.0 -53V0H283.0V-53A22 22 0 0 0 239.0 -53V0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" fill-rule="evenodd" d="M321.0 -48A48 48 0 1 0 417.0 -48A48 48 0 1 0 321.0 -48ZM342.0 -48A27 27 0 1 0 396.0 -48A27 27 0 1 0 342.0 -48Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M396.0 0H417.0V-96H396.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M437.0 0H458.0V-96H437.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M437.0 0V-48A48 48 0 0 1 533.0 -48V0H512.0V-48A27 27 0 0 0 458.0 -48V0Z"/></svg></a>
     <nav class="nav" id="nav" aria-label="Sections">
       <a href="#home" data-view="home">Home <span class="count" id="nav-sites"></span></a>
+      <a href="#folders" data-view="folders">Project folders <span class="count" id="nav-folders"></span></a>
       <a href="#apps" data-view="apps">Apps <span class="count" id="nav-apps"></span></a>
       <a href="#queues" data-view="queues">Queues <span class="count" id="nav-queues"></span></a>
       <a href="#versions" data-view="versions">Versions</a>
@@ -412,19 +425,19 @@ body.down .view, body.down .notes { display: none; }
     </nav>
     <div class="rail-foot">
       <div class="theme" id="theme" role="radiogroup" aria-label="Theme">
-        <button role="radio" data-theme="light" aria-checked="false" title="Light"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></svg><span>Light</span></button>
-        <button role="radio" data-theme="dark" aria-checked="false" title="Dark"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></svg><span>Dark</span></button>
+        <button role="radio" data-theme="light" aria-checked="false" tabindex="-1" title="Light"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></svg><span>Light</span></button>
+        <button role="radio" data-theme="dark" aria-checked="false" tabindex="-1" title="Dark"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></svg><span>Dark</span></button>
         <button role="radio" data-theme="" aria-checked="true" title="Follow Windows"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11.25V14"/></svg><span>Auto</span></button>
       </div>
       <div class="rail-state"><span class="dot" id="dot"></span><span id="state">connecting…</span><button class="ver" id="ver" hidden></button></div>
       <div class="rail-actions">
         <button id="reload" title="Rescan sites and reload the web server">Reload</button>
-        <button id="stop" title="Stop laman: web server, PHP and every database">Stop</button>
+        <button id="stop" title="Stop laman: web server, PHP and every database (asks first)">Stop</button>
       </div>
     </div>
   </aside>
 
-  <main>
+  <main id="main" tabindex="-1">
     <div id="down">
       <div class="hero">
         <p class="prompt"><span class="caret">&gt;</span><span class="word">laman is stopped</span><span class="cursor"></span></p>
@@ -433,11 +446,11 @@ body.down .view, body.down .notes { display: none; }
     </div>
 
     <div class="notes" id="notes"></div>
-    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+    <div class="toasts" id="toasts" aria-live="polite"></div>
 
     <section class="view" data-view="home" aria-labelledby="home-title">
       <div class="hero live">
-        <p class="prompt" id="home-title"><span class="caret">&gt;</span><span class="word" id="headline">laman</span><span class="cursor"></span></p>
+        <h1 class="prompt" id="home-title"><span class="caret" aria-hidden="true">&gt;</span><span class="word" id="headline">laman</span><span class="cursor" aria-hidden="true"></span></h1>
         <p class="summary" id="summary"></p>
         <div class="hero-actions">
           <a id="dblink" class="btn" target="_blank" rel="noopener" hidden title="Your database app">Database ↗</a>
@@ -447,10 +460,16 @@ body.down .view, body.down .notes { display: none; }
         </div>
       </div>
       <ol class="rack" id="rack" aria-label="The stack"></ol>
-      <div class="sect-head"><h2>Sites<span class="count-pill" id="sitecount"></span></h2><input id="sitefind" class="sitefind" type="search" placeholder="Find a site" aria-label="Find a site by name or folder" spellcheck="false" autocomplete="off" hidden></div>
+      <div class="sect-head sticky"><h2>Sites<span class="count-pill" id="sitecount"></span></h2><input id="sitefind" class="sitefind" type="search" placeholder="Find a site  ( / )" aria-label="Find a site by name or folder. Enter opens the first match." aria-keyshortcuts="/" spellcheck="false" autocomplete="off" hidden></div>
       <div class="panel sites" id="sites"></div>
-      <div class="panel empty-state" id="nosites" hidden>No sites yet. Make a folder in one of your project folders below (or run <code>laman link</code> in a project) and it appears here within a couple of seconds.</div>
-      <div class="sect-head spaced" id="folders-head"><h2>Project folders</h2><span class="hint">Every folder inside one becomes a site</span></div>
+      <div class="panel empty-state" id="nosites" hidden>No sites yet. Make a folder in one of your <a href="#folders">project folders</a> (or run <code>laman link</code> in a project) and it appears here within a couple of seconds.</div>
+    </section>
+
+    <section class="view" data-view="folders" hidden aria-labelledby="folders-title">
+      <div class="view-head">
+        <div><h1 id="folders-title">Project folders</h1>
+        <p>Every folder inside one of these becomes a site at <span class="mono">&lt;folder&gt;.test</span>. A prefix keeps names apart when two folders hold projects with the same name.</p></div>
+      </div>
       <div class="panel folders" id="folders"></div>
     </section>
 
@@ -509,7 +528,7 @@ body.down .view, body.down .notes { display: none; }
       </div>
       <div class="panel scroll">
         <table>
-          <thead><tr><th>Service</th><th>State</th><th>Restarts</th><th></th><th>Starts with laman</th></tr></thead>
+          <thead><tr><th>Service</th><th>State</th><th>Restarts</th><th>Uptime</th><th>Starts with laman</th></tr></thead>
           <tbody id="services"></tbody>
         </table>
       </div>
@@ -519,17 +538,17 @@ body.down .view, body.down .notes { display: none; }
 
     <section class="view" data-view="logs" hidden aria-labelledby="logs-title">
       <div class="view-head"><div><h1 id="logs-title">Logs</h1></div></div>
-      <div class="tabs" role="tablist" id="tabs">
-        <button role="tab" data-log="php" aria-selected="true">PHP</button>
-        <button role="tab" data-log="caddy">Caddy</button>
-        <button role="tab" data-log="mariadb">MariaDB</button>
-        <button role="tab" data-log="postgres">PostgreSQL</button>
-        <button role="tab" data-log="redis">Redis</button>
-        <button role="tab" data-log="mailpit">Mailpit</button>
-        <button role="tab" data-log="upgrade">Upgrade</button>
-        <button role="tab" data-log="laman">laman</button>
+      <div class="tabs" role="tablist" id="tabs" aria-label="Log">
+        <button role="tab" id="tab-php" data-log="php" aria-controls="log" aria-selected="true" tabindex="0">PHP</button>
+        <button role="tab" id="tab-caddy" data-log="caddy" aria-controls="log" aria-selected="false" tabindex="-1">Caddy</button>
+        <button role="tab" id="tab-mariadb" data-log="mariadb" aria-controls="log" aria-selected="false" tabindex="-1">MariaDB</button>
+        <button role="tab" id="tab-postgres" data-log="postgres" aria-controls="log" aria-selected="false" tabindex="-1">PostgreSQL</button>
+        <button role="tab" id="tab-redis" data-log="redis" aria-controls="log" aria-selected="false" tabindex="-1">Redis</button>
+        <button role="tab" id="tab-mailpit" data-log="mailpit" aria-controls="log" aria-selected="false" tabindex="-1">Mailpit</button>
+        <button role="tab" id="tab-upgrade" data-log="upgrade" aria-controls="log" aria-selected="false" tabindex="-1">Upgrade</button>
+        <button role="tab" id="tab-laman" data-log="laman" aria-controls="log" aria-selected="false" tabindex="-1">laman</button>
       </div>
-      <pre id="log" tabindex="0"></pre>
+      <pre id="log" tabindex="0" role="tabpanel" aria-labelledby="tab-php"></pre>
     </section>
   </main>
 </div>

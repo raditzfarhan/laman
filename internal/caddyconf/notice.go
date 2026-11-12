@@ -48,7 +48,7 @@ func Notice(in NoticeInput) string {
 			title = "The dev server isn't answering"
 			body = fmt.Sprintf(`<p>%s is running on port %d but didn't answer. It may still be compiling; this page retries by itself.</p>`, cmd, in.Port)
 		default:
-			title = "Its dev server isn't running"
+			title = "The dev server isn't running"
 			body = `<p>This is a ` + e(s.Framework) + ` project, so it needs its dev server. laman can run ` + cmd + ` for you and send <b>` + e(s.Host) + `</b> to it.</p>` +
 				`<p>` + link("start", "Start it in the dashboard") + `</p>` +
 				`<p class="fine">Or in a terminal: <code>laman dev start ` + e(s.Name) + `</code>. This page opens the app once it's up.</p>`

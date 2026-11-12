@@ -73,10 +73,31 @@ function siteURL(host) {
   return `${https ? "https" : "http"}://${host}${port === def ? "" : ":" + port}/`;
 }
 
+// Redraws replace elements; if the focused one goes, focus moves to the
+// element at the same place in the new markup, so keyboard users keep theirs.
+function focusPath(node) {
+  const path = [];
+  while (node && !node.id && node.parentElement) {
+    path.unshift([...node.parentElement.children].indexOf(node));
+    node = node.parentElement;
+  }
+  return node?.id ? { root: node.id, path } : null;
+}
 function render(force) {
   if (!status) return;
   // Leave the tables alone while the user has a dropdown open.
   if (document.activeElement?.tagName === "SELECT") return;
+  const had = document.activeElement;
+  const where = had && had !== document.body && $("main").contains(had) ? focusPath(had) : null;
+  draw(force);
+  if (where && !had.isConnected) {
+    let n = $(where.root);
+    for (const i of where.path) n = n?.children[i];
+    if (n && n.tabIndex >= 0) n.focus({ preventScroll: true });
+  }
+}
+
+function draw(force) {
   if (force) drawn = {};
 
   const problems = status.services.filter((s) => s.state !== "running");
@@ -178,11 +199,36 @@ function render(force) {
   if (exts && changed("exts", [exts, $("extfilter").value, vers?.versions.find((v) => v.kind === "php")?.installed])) renderExts();
 }
 
+// Job messages ("Installed PHP 8.4") stay 10 seconds after the job ends;
+// errors stay until the next job.
+const jobSeen = {};
+// A finished job's message shows only if this page saw it running or the
+// user just did something, so an old "Updated the hosts file" from hours
+// ago doesn't greet every visit.
+const jobRan = {};
+let lastAct = 0;
+function jobText(key, job) {
+  if (job.error) return job.error;
+  if (job.running) { jobRan[key] = true; delete jobSeen[key]; return job.message || ""; }
+  if (!job.message) return "";
+  if (jobSeen[key]?.msg !== job.message) {
+    const fresh = jobRan[key] || Date.now() - lastAct < 60000;
+    jobSeen[key] = { msg: job.message, at: fresh ? Date.now() : 0 };
+    delete jobRan[key];
+    if (fresh) setTimeout(() => render(true), 10100);
+  }
+  return Date.now() - jobSeen[key].at < 10000 ? job.message : "";
+}
+
 // Sites, grouped by the project folder they are in (links last). With one
 // group there are no headers; a group can be folded away, and the search
 // box narrows every group at once.
 let folded = new Set(); // folder paths folded away (kept in this browser)
-try { folded = new Set(JSON.parse(localStorage.getItem("laman.folded") || "[]")); } catch { /* private window */ }
+let foldChosen = false;  // false until the user folds or opens a group
+try {
+  const saved = localStorage.getItem("laman.folded");
+  if (saved) { folded = new Set(JSON.parse(saved)); foldChosen = true; }
+} catch { /* private window */ }
 const siteQuery = () => ($("sitefind")?.value || "").trim().toLowerCase();
 
 function renderSites(ownSites, installed, shares) {
@@ -202,6 +248,12 @@ function renderSites(ownSites, installed, shares) {
   if (none.list.length) groups.push(none);
   const used = groups.filter((g) => g.list.length);
   const flat = used.length < 2;
+  // A long list starts with every group but the first folded, so Home
+  // opens as an overview; Find still searches all of them.
+  if (!foldChosen && !flat && ownSites.length > 30) {
+    for (const g of used.slice(1)) if (g.key !== NONE) folded.add(g.key);
+    foldChosen = true;
+  }
   const out = [];
   for (const g of used) {
     const shown = g.list.filter(match);
@@ -213,6 +265,7 @@ function renderSites(ownSites, installed, shares) {
         onclick: () => {
           if (q) return;
           folded.has(g.key) ? folded.delete(g.key) : folded.add(g.key);
+          foldChosen = true;
           try { localStorage.setItem("laman.folded", JSON.stringify([...folded])); } catch { /* private window */ }
           render(true);
         } },
@@ -389,7 +442,8 @@ function renderHome(problems, notesCount) {
     notesCount ? ` · ${notesCount} note${notesCount === 1 ? "" : "s"} above` : "");
   const dirs = status.sitesDirs || [status.sitesDir];
   $("sitesdirlabel").textContent = dirs.length > 1 ? "Project folders:" : "Sites folder:";
-  $("sitesdir").textContent = dirs.length > 1 ? `${dirs.length} ↓` : status.sitesDir ? shortPath(tidy(status.sitesDir)) : "";
+  $("sitesdir").textContent = dirs.length > 1 ? String(dirs.length) : status.sitesDir ? shortPath(tidy(status.sitesDir)) : "";
+  $("nav-folders").textContent = String(dirs.length);
   $("opensites").title = dirs.length > 1 ? "Show your project folders" : status.sitesDir ? `Open ${tidy(status.sitesDir)} in Explorer` : "";
   $("sitecount").textContent = n ? String(n) : "";
   $("nav-sites").textContent = n ? String(n) : "";
@@ -468,7 +522,7 @@ function renderApps() {
       el("div", { class: "actions" }, actions));
   }));
   $("appjob").className = "job " + (apps.job.error ? "err" : "");
-  $("appjob").textContent = apps.job.error || apps.job.message || "";
+  $("appjob").textContent = jobText("apps", apps.job);
 }
 
 // Queues: Laravel jobs in laman's Redis. Polled only while the view is open;
@@ -523,10 +577,14 @@ function renderQueues() {
   const list = queues.queues || [];
   const sum = (k) => list.reduce((n, q) => n + (q[k] || 0), 0);
   const pending = sum("waiting") + sum("delayed") + sum("reserved");
-  $("nav-queues").textContent = pending ? String(pending) : "";
   const failed = sum("failed");
+  // The rail shows what needs you: failed jobs first, else work waiting.
+  const nq = $("nav-queues");
+  nq.textContent = failed ? String(failed) : pending ? String(pending) : "";
+  nq.className = "count" + (failed ? " bad" : "");
+  nq.title = failed ? `${failed} failed job${failed === 1 ? "" : "s"}` : pending ? `${pending} job${pending === 1 ? "" : "s"} waiting or running` : "";
   const stat = (n, label, bad) => el("span", { class: "stat" }, el("b", { class: n ? (bad ? "bad" : "") : "zero" }, String(n)), el("span", {}, label));
-  $("qtotals").replaceChildren(stat(sum("waiting"), "waiting"), stat(sum("delayed"), "delayed"), stat(sum("reserved"), "running"), stat(failed, "failed", true));
+  $("qtotals").replaceChildren(el("span", { class: "qcap" }, "All sites:"), stat(sum("waiting"), "waiting"), stat(sum("delayed"), "delayed"), stat(sum("reserved"), "running"), stat(failed, "failed", true));
 
   const idle = queues.idle || [], unchecked = queues.unchecked || [], other = queues.other || [];
   const known = new Set([...list.map((q) => q.site).filter(Boolean), ...idle, ...unchecked.map((u) => u.site), ...other.map((o) => o.site)]);
@@ -535,7 +593,10 @@ function renderQueues() {
   const hit = (host) => !q || host.toLowerCase().includes(q);
 
   const rows = list.filter((x) => hit(qsite(x)) || (q && x.name.toLowerCase().includes(q)));
-  $("qhint").textContent = list.length ? `${list.length} queue${list.length === 1 ? "" : "s"} with work or failures` : "";
+  const siteCount = new Set(list.map(qsite)).size;
+  $("qhint").textContent = list.length ? `${list.length} queue${list.length === 1 ? "" : "s"} in ${siteCount} site${siteCount === 1 ? "" : "s"} with work or failures` : "";
+  qPerSite = new Map();
+  for (const x of list) qPerSite.set(qsite(x), (qPerSite.get(qsite(x)) || 0) + 1);
   const box = $("queues");
   if (rows.length) box.replaceChildren(...rows.map(queueRow));
   else box.replaceChildren(el("div", { class: "qempty" },
@@ -581,6 +642,7 @@ function renderQueues() {
     ...(shown.length ? [el("div", { class: "sect-head spaced" }, el("h2", {}, "Everything else")), el("div", { class: "panel" }, shown)] : []));
 }
 
+let qPerSite = new Map(); // site -> number of busy queues (names the queue when > 1)
 function queueRow(q) {
   const id = qid(q);
   const open = openQueues.has(id);
@@ -589,7 +651,8 @@ function queueRow(q) {
   const pending = q.waiting + q.delayed;
   const row = el("div", { class: "row" },
     el("div", { class: "who" },
-      el("span", { class: "qsite" }, q.site ? el("a", { href: siteURL(q.site), target: "_blank", rel: "noopener" }, bare(q.site)) : qsite(q)),
+      el("span", { class: "qsite" }, q.site ? el("a", { href: siteURL(q.site), target: "_blank", rel: "noopener" }, bare(q.site)) : qsite(q),
+        qPerSite.get(qsite(q)) > 1 ? el("span", { class: "qn" }, ` · ${q.name}`) : null),
       el("span", { class: "qname" }, `${q.driver === "redis" ? "redis" : `database · ${q.conn}`} · queue ${q.name}`)),
     el("div", { class: "counts" }, stat(q.waiting, "waiting"), stat(q.delayed, "delayed"), stat(q.reserved, "running"), stat(q.failed, "failed", true)),
     el("div", { class: "acts" },
@@ -895,7 +958,7 @@ async function pickFolder() {
 }
 
 // Views: one per rail entry, chosen by the URL hash so reloads keep it.
-const VIEWS = ["home", "apps", "queues", "versions", "extensions", "services", "logs"];
+const VIEWS = ["home", "folders", "apps", "queues", "versions", "extensions", "services", "logs"];
 const currentView = () => (VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "home");
 function showView() {
   const view = currentView();
@@ -1061,7 +1124,7 @@ function renderVersions() {
       use, add, up);
   }));
   $("job").className = "job " + (vers.job.error ? "err" : "muted");
-  $("job").textContent = vers.job.error || vers.job.message || "";
+  $("job").textContent = jobText("versions", vers.job);
 }
 
 // PHP extensions: shipped ones get a switch; extras can be installed and
@@ -1099,7 +1162,7 @@ function renderExts() {
   }));
   if (!list.length) $("exts").replaceChildren(el("p", { class: "muted" }, "No extension matches."));
   $("extjob").className = "job " + (exts.job.error ? "err" : "muted");
-  $("extjob").textContent = exts.job.error || exts.job.message || "";
+  $("extjob").textContent = jobText("exts", exts.job);
 }
 
 // Blur first: redraws pause while a dropdown has focus.
@@ -1123,7 +1186,10 @@ function applyTheme(t) {
   if (t) document.documentElement.dataset.theme = t;
   else delete document.documentElement.dataset.theme;
   try { t ? localStorage.setItem("laman.theme", t) : localStorage.removeItem("laman.theme"); } catch { /* private window */ }
-  for (const b of $("theme").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.theme === t));
+  for (const b of $("theme").querySelectorAll("button")) {
+    b.setAttribute("aria-checked", String(b.dataset.theme === t));
+    b.tabIndex = b.dataset.theme === t ? 0 : -1;
+  }
 }
 applyTheme(document.documentElement.dataset.theme || "");
 for (const b of $("theme").querySelectorAll("button")) {
@@ -1177,6 +1243,7 @@ async function checkUpdate() {
 }
 
 async function act(fn) {
+  lastAct = Date.now();
   try { await fn(); } catch (e) { alertNote(e.message); }
   drawn = {};
   refresh();
@@ -1194,7 +1261,7 @@ function alertNote(msg, cls = "note err") {
     t.count++;
     t.node.querySelector(".times").textContent = `×${t.count}`;
   } else {
-    const node = el("div", { class: `toast ${kind}`, role: kind === "err" ? "alert" : undefined },
+    const node = el("div", { class: `toast ${kind}` },
       el("div", { class: "msg" }, msg, el("span", { class: "times" })),
       el("button", { class: "x", "aria-label": "Dismiss", title: "Dismiss", onclick: () => dropToast(msg) }, "×"));
     t = { node, count: 1, timer: 0 };
@@ -1240,17 +1307,49 @@ async function copyLink(host, url) {
 const setSitePHP = (site, version) => act(() => api("POST", "/api/sites/php", { site, version }));
 $("reload").onclick = () => act(() => api("POST", "/reload"));
 $("opensites").onclick = () => {
-  if ((status?.sitesDirs || []).length > 1) $("folders-head").scrollIntoView({ behavior: "smooth", block: "start" });
+  if ((status?.sitesDirs || []).length > 1) location.hash = "#folders";
   else act(() => api("POST", "/api/sites/open-folder"));
 };
-$("stop").onclick = () => act(() => api("POST", "/stop"));
+// Stop takes down every server, so it asks first (like Remove).
+let stopAsk = 0;
+const TITLE_STOP = $("stop").title;
+$("stop").onclick = () => {
+  const b = $("stop");
+  if (Date.now() > stopAsk) {
+    stopAsk = Date.now() + 6000;
+    b.classList.add("confirm");
+    b.title = "Click again within 6 seconds to stop the web server, PHP and every database";
+    b.textContent = "Stop all?";
+    setTimeout(() => { if (Date.now() >= stopAsk) { b.classList.remove("confirm"); b.textContent = "Stop"; b.title = TITLE_STOP; } }, 6050);
+    return;
+  }
+  stopAsk = 0;
+  b.classList.remove("confirm");
+  b.textContent = "Stop";
+  b.title = TITLE_STOP;
+  act(() => api("POST", "/stop"));
+};
 
 function showLog(name) {
   logName = name;
-  for (const o of $("tabs").querySelectorAll("button")) o.setAttribute("aria-selected", o.dataset.log === name);
+  for (const o of $("tabs").querySelectorAll("button")) {
+    o.setAttribute("aria-selected", String(o.dataset.log === name));
+    o.tabIndex = o.dataset.log === name ? 0 : -1;
+  }
+  $("log").setAttribute("aria-labelledby", `tab-${name}`);
   loadLog(true);
 }
 for (const b of $("tabs").querySelectorAll("button")) b.onclick = () => showLog(b.dataset.log);
+$("tabs").addEventListener("keydown", (e) => {
+  const list = [...$("tabs").querySelectorAll("button")];
+  const i = list.indexOf(document.activeElement);
+  const step = { ArrowLeft: -1, ArrowRight: 1, Home: -i, End: list.length - 1 - i }[e.key];
+  if (i < 0 || step === undefined) return;
+  e.preventDefault();
+  const next = list[(i + step + list.length) % list.length];
+  next.focus();
+  showLog(next.dataset.log);
+});
 
 async function loadLog(jump) {
   const pre = $("log");
@@ -1272,7 +1371,27 @@ setInterval(refresh, 2000);
 setInterval(() => { if (!document.querySelector('[data-view="logs"]').hidden) loadLog(false); }, 3000);
 
 $("sitefind").addEventListener("input", () => render());
-$("sitefind").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.target.value = ""; render(); } });
+$("sitefind").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { if (e.target.value) { e.target.value = ""; render(); } else e.target.blur(); }
+  if (e.key === "Enter") {
+    const first = $("sites").querySelector(".site .host");
+    if (first && e.target.value.trim()) window.open(first.href, "_blank", "noopener");
+  }
+});
+
+// "/" jumps to the view's search box, as on the localhost page.
+const FINDS = { home: "sitefind", queues: "qfind", extensions: "extfilter" };
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+  const box = $(FINDS[currentView()] || "");
+  if (!box || box.hidden) return;
+  e.preventDefault();
+  box.focus();
+  box.select();
+});
+$("skip").addEventListener("click", (e) => { e.preventDefault(); $("main").focus(); });
 
 // A site's "start it" page links here with ?start=<name>; a group's or
 // another site's page with ?site=<name>. Show that row and, for ?start,
@@ -1289,6 +1408,7 @@ $("sitefind").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.t
   const show = () => {
     const s = status?.sites.find((x) => x.name === name);
     if (!s) { if (++tries < 40) setTimeout(show, 300); return; }
+    foldChosen = true;
     if (s.kind === "none") folded.add(NONE);
     else if (s.folder) folded.delete(s.folder);
     render(true);
