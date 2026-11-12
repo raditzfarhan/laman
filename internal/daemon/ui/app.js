@@ -170,7 +170,7 @@ function draw(force) {
   // place below so the rows (and their buttons) stay put.
   const devShape = (status.dev || []).map(({ uptime, ...rest }) => rest);
   if (changed("sites", [ownSites, status.php, installed, status.httpsPort, status.httpsTrusted, status.httpPort, shares, opening, copied, shareOpts,
-    status.shareDomain, shareCfg?.pattern, status.folders, siteQuery(), [...folded], devShape, status.devAuto, [...devOpen], devBusy, devAsk, flashSite])) renderSites(ownSites, installed, shares);
+    status.shareDomain, shareCfg?.pattern, status.folders, status.editor, siteQuery(), [...folded], devShape, status.devAuto, [...devOpen], devBusy, devAsk, flashSite])) renderSites(ownSites, installed, shares);
   for (const pre of document.querySelectorAll("[data-devout]")) {
     const text = devOut[pre.dataset.devout] ?? "Loading…";
     if (pre.textContent !== text) {
@@ -193,6 +193,7 @@ function draw(force) {
   }
 
   if (vers && changed("versions", [vers, avail, pending])) renderVersions();
+  if (editors && changed("editors", [editors, status.editor])) renderEditors();
   if (apps && changed("apps", [apps, removing, status.httpsPort, status.httpsTrusted, status.httpPort])) renderApps();
   if (shareCfg && changed("sharing", [shareCfg, shareEditing])) renderSharing();
   if (queues && changed("queues", [queues, [...openQueues], queueJobs, clearing, [...othersOpen], $("qfind").value])) renderQueues();
@@ -283,6 +284,31 @@ function renderSites(ownSites, installed, shares) {
 
 const NONE = "\u0000none"; // the "Not websites" group's key
 
+// Inline SVG (el() makes HTML elements, which can't draw SVG).
+const ICONS = {
+  folder: '<path d="M1.75 4.25a1 1 0 0 1 1-1h3.2l1.5 1.6h5.8a1 1 0 0 1 1 1v6.4a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/>',
+  code: '<path d="M5.5 4.25 1.75 8l3.75 3.75M10.5 4.25 14.25 8l-3.75 3.75"/>',
+};
+function icon(name) {
+  const t = document.createElement("template");
+  t.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+  return t.content.firstChild;
+}
+
+// The end of a row: the project's folder, the editor, and Open.
+function rowEnds(s, open = true) {
+  const url = siteURL(s.host);
+  return el("span", { class: "ends" },
+    s.path ? el("button", { class: "icon", title: `Open ${tidy(s.path)} in Explorer`, "aria-label": `Open ${s.host}'s folder`,
+      onclick: () => act(() => api("POST", "/api/sites/reveal", { site: s.host, in: "folder" })) }, icon("folder")) : null,
+    s.path && status.editor ? el("button", { class: "icon", title: `Open in ${status.editor}`, "aria-label": `Open ${s.host} in ${status.editor}`,
+      onclick: () => act(async () => {
+        await api("POST", "/api/sites/reveal", { site: s.host, in: "editor" });
+        alertNote(`Opening ${s.name} in ${status.editor}…`, "note info");
+      }) }, icon("code")) : null,
+    open ? el("a", { class: "open", href: url, target: "_blank", rel: "noopener", "aria-label": `Open ${s.host}` }, "Open ↗") : null);
+}
+
 function siteRow(s, installed, shares) {
     if (s.kind === "node") return nodeRow(s, shares);
     if (s.kind === "proxy" || s.kind === "group" || s.kind === "none") return plainRow(s);
@@ -305,7 +331,7 @@ function siteRow(s, installed, shares) {
           ? el("button", { class: "sharebtn more", "aria-label": `More ways to share ${s.host}`, "aria-expanded": shareOpts === s.host ? "true" : "false",
             onclick: () => { shareOpts = shareOpts === s.host ? "" : s.host; render(true); } }, "▾")
           : null),
-      el("a", { class: "open", href: url, target: "_blank", rel: "noopener", "aria-label": `Open ${s.host}` }, "Open ↗"),
+      rowEnds(s),
       shareBlock(s, sh));
 }
 
@@ -371,7 +397,7 @@ function nodeRow(s, shares) {
       el("button", { class: "linkish", "aria-expanded": open ? "true" : "false",
         onclick: () => { open ? devOpen.delete(s.host) : devOpen.add(s.host); loadDevOut(); render(true); } }, open ? "Hide output" : "Output")),
     shareGroup(s, sh, d.state !== "running"),
-    el("a", { class: "open", href: url, target: "_blank", rel: "noopener", "aria-label": `Open ${s.host}` }, "Open ↗"),
+    rowEnds(s),
     asked && !up ? el("div", { class: "shared" },
       el("span", {}, `Start ${s.host}'s dev server? It runs `, el("code", {}, s.devCmd), "."),
       el("span", { class: "acts" },
@@ -413,7 +439,7 @@ function plainRow(s) {
       s.path ? el("span", { class: "path", title: s.path }, shortPath(tidy(s.path))) : null,
       sub),
     middle, el("span"),
-    s.kind === "none" ? el("span") : el("a", { class: "open", href: url, target: "_blank", rel: "noopener", "aria-label": `Open ${s.host}` }, "Open ↗"));
+    rowEnds(s, s.kind !== "none"));
 }
 
 async function loadDevOut() {
@@ -957,6 +983,29 @@ async function pickFolder() {
   refresh();
 }
 
+// Code editor: the one the </> button on each site opens.
+let editors = null; // GET /api/editors: {found: [{id, name}], choice}
+async function loadEditors() {
+  try { editors = await api("GET", "/api/editors"); } catch { return; }
+  render();
+}
+
+function renderEditors() {
+  const box = $("editorpick");
+  if (!editors.found.length) {
+    box.replaceChildren(el("p", { class: "muted" }, "No code editor found. laman looks for VS Code, Cursor, Windsurf, Zed, PhpStorm and Sublime Text; install one and it shows up here within a minute."));
+    return;
+  }
+  const first = editors.found[0].name;
+  const sel = el("select", { "aria-label": "Code editor",
+    onchange: (e) => { const id = e.target.value; e.target.blur(); act(async () => { await api("POST", "/api/editor", { id }); await loadEditors(); }); } },
+    el("option", { value: "", selected: !editors.choice }, `Automatic (${first})`),
+    editors.found.map((x) => el("option", { value: x.id, selected: editors.choice === x.id }, x.name)));
+  box.replaceChildren(el("div", { class: "editor-pick" },
+    el("label", {}, "Open projects in", sel),
+    el("span", { class: "fine", style: "margin:0" }, "Also ", el("code", {}, "laman editor <name>"), " in a terminal.")));
+}
+
 // Views: one per rail entry, chosen by the URL hash so reloads keep it.
 const VIEWS = ["home", "folders", "apps", "queues", "versions", "extensions", "services", "logs"];
 const currentView = () => (VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "home");
@@ -973,6 +1022,7 @@ function showView() {
   if (view === "logs") loadLog(true);
   if (view === "queues") loadQueues();
   if (view === "services") loadShareSetup();
+  if (view === "folders") loadEditors();
   render();
 }
 window.addEventListener("hashchange", showView);

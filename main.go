@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"laman/internal/config"
 	"laman/internal/daemon"
 	"laman/internal/desktop"
+	"laman/internal/editor"
 	"laman/internal/hosts"
 	"laman/internal/install"
 	"laman/internal/sites"
@@ -78,6 +80,7 @@ Usage:
   laman trust [--reset]           trust laman's local CA so https:// works without warnings
   laman untrust                   remove the CA from the Windows certificate store
   laman config                    print the config file path and contents
+  laman editor [name]             list code editors, or pick the one the dashboard opens
   laman self-install              copy laman into ~/.laman/bin and add it to your PATH
   laman self-uninstall            stop laman, take it off PATH and sign-in, remove its CA (keeps data)
   laman update [--check]          install the newest laman release
@@ -184,6 +187,8 @@ func main() {
 		err = cmdUntrust()
 	case "config":
 		err = cmdConfig()
+	case "editor":
+		err = cmdEditor(args)
 	case "daemon":
 		err = daemon.Run()
 	case "help", "-h", "--help":
@@ -985,6 +990,55 @@ func cmdConfig() error {
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	fmt.Printf("%s\n%s\n", config.Path(), b)
+	return nil
+}
+
+// cmdEditor lists the editors found, or saves the one the dashboard's
+// "Open in editor" uses ("auto" = the first one found).
+func cmdEditor(args []string) error {
+	cfg, err := loadOrInit()
+	if err != nil {
+		return err
+	}
+	found := editor.Found()
+	if len(args) == 0 {
+		cur, ok := editor.Pick(cfg.Editor, found)
+		if !ok {
+			fmt.Println("No code editor found. laman looks for VS Code, Cursor, Windsurf, Zed, PhpStorm and Sublime Text.")
+			return nil
+		}
+		for _, e := range found {
+			mark := "  "
+			if e.ID == cur.ID {
+				mark = "* "
+			}
+			fmt.Printf("%s%-9s %-13s %s\n", mark, e.ID, e.Name, e.Path)
+		}
+		if cfg.Editor == "" {
+			fmt.Println("\nAutomatic: the first one found. Pick another with `laman editor <name>`.")
+		}
+		return nil
+	}
+	id := strings.ToLower(args[0])
+	if id == "auto" {
+		id = ""
+	} else if !slices.Contains(editor.IDs(), id) {
+		return fmt.Errorf("unknown editor %q; choose one of %s, or auto", args[0], strings.Join(editor.IDs(), ", "))
+	}
+	cfg.Editor = id
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	if e, ok := editor.Pick(id, found); ok {
+		if id != "" && e.ID != id {
+			fmt.Printf("Saved %s, but it isn't installed; the dashboard uses %s until it is.\n", id, e.Name)
+		} else {
+			fmt.Printf("The dashboard opens projects in %s.\n", e.Name)
+		}
+	}
+	if client.Running() {
+		api("POST", "/reload")
+	}
 	return nil
 }
 

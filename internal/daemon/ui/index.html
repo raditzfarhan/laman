@@ -138,6 +138,13 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .site .path { display: block; font: 12px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .site .open { color: var(--muted); text-decoration: none; font-size: 13px; padding: 5px 8px; border-radius: 7px; }
 .site .open:hover { color: var(--ink); background: var(--code); }
+/* Folder and editor: icon buttons beside Open */
+.site .ends { display: inline-flex; align-items: center; gap: 2px; justify-self: end; }
+.site .icon { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); }
+.site .icon:hover:not(:disabled) { color: var(--ink); background: var(--code); }
+.site .icon svg { width: 16px; height: 16px; }
+.editor-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 0; }
+.editor-pick label { display: flex; align-items: center; gap: 10px; }
 .site .sharebtn { background: none; border-color: transparent; color: var(--muted); font-size: 13px; padding: 5px 8px; }
 .site .sharebtn:hover:not(:disabled) { color: var(--ink); background: var(--code); border-color: transparent; }
 .site .shared { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: -4px; padding: 8px 10px 8px 12px; border-radius: 8px; background: var(--code); font-size: 13px; }
@@ -471,6 +478,8 @@ body.down .view, body.down .notes { display: none; }
         <p>Every folder inside one of these becomes a site at <span class="mono">&lt;folder&gt;.test</span>. A prefix keeps names apart when two folders hold projects with the same name.</p></div>
       </div>
       <div class="panel folders" id="folders"></div>
+      <div class="sect-head spaced"><h2 id="editor-title">Code editor</h2><span class="hint">What the <span class="mono">&lt;/&gt;</span> button on each site opens</span></div>
+      <div class="panel pad" id="editorpick" aria-labelledby="editor-title"></div>
     </section>
 
     <section class="view" data-view="apps" hidden aria-labelledby="apps-title">

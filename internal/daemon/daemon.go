@@ -52,8 +52,9 @@ type Status struct {
 	Notes        []string        `json:"notes,omitempty"`
 	UserHome     string          `json:"userHome"`
 	SitesDir     string          `json:"sitesDir"`
-	SitesDirs    []string        `json:"sitesDirs"` // every project folder, the main one first
-	Theme        string          `json:"theme"`     // "light", "dark" or "" (follow the system)
+	SitesDirs    []string        `json:"sitesDirs"`        // every project folder, the main one first
+	Theme        string          `json:"theme"`            // "light", "dark" or "" (follow the system)
+	Editor       string          `json:"editor,omitempty"` // the editor "Open in editor" uses, by name ("" = none installed)
 	Folders      []sites.Folder  `json:"folders"`
 	Dev          []DevStatus     `json:"dev"`               // dev servers started since laman started
 	DevAuto      map[string]bool `json:"devAuto,omitempty"` // site names whose dev server starts with laman   // the same, with name prefixes
@@ -455,6 +456,7 @@ func (d *daemon) refresh() error {
 		d.cfg.PHP, d.cfg.Isolated = fresh.PHP, fresh.Isolated
 		d.cfg.Apps, d.cfg.DBClient = fresh.Apps, fresh.DBClient
 		d.cfg.Theme, d.cfg.Proxies, d.cfg.DevAuto = fresh.Theme, fresh.Proxies, fresh.DevAuto
+		d.cfg.Editor = fresh.Editor
 	}
 	raw, clashes := d.cfg.Discover()
 
@@ -672,7 +674,7 @@ func (d *daemon) status() Status {
 	defer d.mu.Unlock()
 	st := Status{
 		PID: os.Getpid(), Home: config.Home(), HTTPPort: d.cfg.HTTPPort,
-		PHP: d.defaultPHP, WebServer: "Caddy " + caddyVersion(), UserHome: userHome(), SitesDir: d.cfg.SitesDir, SitesDirs: d.cfg.SitesDirs(), Folders: d.cfg.Folders(), Theme: d.cfg.Theme,
+		PHP: d.defaultPHP, WebServer: "Caddy " + caddyVersion(), UserHome: userHome(), SitesDir: d.cfg.SitesDir, SitesDirs: d.cfg.SitesDirs(), Folders: d.cfg.Folders(), Theme: d.cfg.Theme, Editor: d.editorName(),
 		Dev: []DevStatus{}, DevAuto: d.cfg.DevAuto,
 		Sites: d.sites, HostsStale: d.hostsStale, Notes: append(append([]string{}, d.skipped...), d.notes...),
 		HTTPSTrusted: d.tls.trusted, HTTPSNote: d.tls.note, Shares: d.shareInfo(),

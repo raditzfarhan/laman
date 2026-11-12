@@ -64,6 +64,9 @@ type Config struct {
 	// Theme is the dashboard's look: "light", "dark", or "" to follow
 	// the system. The localhost page uses it too.
 	Theme string `json:"theme,omitempty"`
+	// Editor opens a site's folder from the dashboard: an editor ID
+	// ("vscode", "cursor", ...) or "" for the first one installed.
+	Editor string `json:"editor,omitempty"`
 	// Proxies: `laman proxy <name> <port>` sites, name -> "127.0.0.1:3000".
 	Proxies map[string]string `json:"proxies,omitempty"`
 	// DevAuto: Node sites (by name) whose dev server starts with laman.
