@@ -222,6 +222,13 @@ func dropNotes(notes []string, prefix string) []string {
 // runJob runs `laman <args>` without a window as the one background job.
 // The job message is the command's last line of output.
 func (d *daemon) runJob(title string, args []string, after func()) error {
+	return d.runJobEnv(title, args, nil, after)
+}
+
+// runJobEnv is runJob with extra environment variables (NAME=value) for the
+// child, added to the daemon's own. Use it for secrets, which must not appear
+// in arguments or logs.
+func (d *daemon) runJobEnv(title string, args, env []string, after func()) error {
 	j := &d.installJob
 	j.mu.Lock()
 	if j.running {
@@ -235,6 +242,9 @@ func (d *daemon) runJob(title string, args []string, after func()) error {
 		var out []byte
 		if err == nil {
 			cmd := exec.Command(exe, args...)
+			if len(env) > 0 {
+				cmd.Env = append(os.Environ(), env...)
+			}
 			noWindow(cmd)
 			out, err = cmd.CombinedOutput()
 		}

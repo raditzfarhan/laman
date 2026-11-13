@@ -130,6 +130,7 @@ func (d *daemon) dashboardRoutes(mux *http.ServeMux) {
 	d.shareSetupRoutes(mux)
 	d.folderRoutes(mux)
 	d.newProjectRoutes(mux)
+	d.importRoutes(mux)
 	d.editorRoutes(mux)
 	d.serviceControlRoutes(mux)
 }

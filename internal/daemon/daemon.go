@@ -27,6 +27,7 @@ import (
 	"laman/internal/config"
 	"laman/internal/hosts"
 	"laman/internal/install"
+	"laman/internal/laragon"
 	"laman/internal/sites"
 )
 
@@ -72,6 +73,15 @@ type Status struct {
 	HTTPSNote    string `json:"httpsNote,omitempty"`
 
 	Update UpdateInfo `json:"update"` // laman's own version and any newer release
+
+	Laragon LaragonStatus `json:"laragon"`
+}
+
+// LaragonStatus: Found is a Laragon install at C:\laragon; Notice asks the
+// Home page to offer the import (found and not yet imported or dismissed).
+type LaragonStatus struct {
+	Found  bool `json:"found"`
+	Notice bool `json:"notice"`
 }
 
 type daemon struct {
@@ -117,6 +127,9 @@ type daemon struct {
 	devRefresh bool                  // a refresh for a dev server change is queued; guarded by mu
 	quitOnce   sync.Once
 	updates    updater // laman's own newer release, if any
+	// laragonFound: a Laragon install is at laragon.DefaultRoot, checked at
+	// each refresh so the status stays cheap. Guarded by mu.
+	laragonFound bool
 }
 
 func Run() error {
@@ -596,7 +609,9 @@ func (d *daemon) refresh() error {
 	}
 
 	d.raw = raw
+	_, lerr := laragon.Find(laragon.DefaultRoot)
 	d.mu.Lock()
+	d.laragonFound = lerr == nil
 	d.sites, d.hostsStale, d.tls, d.webErr = list, stale, tlsState, ""
 	d.defaultPHP, d.notes = defaultPHP, notes
 	d.mu.Unlock()
@@ -682,8 +697,13 @@ func (d *daemon) status() Status {
 		HTTPSTrusted: d.tls.trusted, HTTPSNote: d.tls.note, Shares: d.shareInfo(),
 		Update: d.updates.get(),
 	}
-	if cfg, err := config.Load(); err == nil && cfg.ShareTunnel != "" {
-		st.ShareDomain = cfg.ShareDomain
+	st.Laragon.Found = d.laragonFound
+	st.Laragon.Notice = d.laragonFound
+	if cfg, err := config.Load(); err == nil {
+		if cfg.ShareTunnel != "" {
+			st.ShareDomain = cfg.ShareDomain
+		}
+		st.Laragon.Notice = d.laragonFound && cfg.LaragonNotice == ""
 	}
 	for _, s := range d.devs { // s.status takes only the server's own lock
 		st.Dev = append(st.Dev, s.status())
