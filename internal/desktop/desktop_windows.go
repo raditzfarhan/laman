@@ -178,16 +178,47 @@ func processesAt(exe string) []uint32 {
 	if err != nil {
 		return nil
 	}
-	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	var out []uint32
+	walkProcesses(func(name string) bool { return strings.EqualFold(name, filepath.Base(want)) },
+		func(pid uint32, path string) {
+			if strings.EqualFold(path, want) {
+				out = append(out, pid)
+			}
+		})
+	return out
+}
+
+// ProcessesUnder lists the full executable paths of running processes whose
+// image is inside dir (case-insensitive), without duplicates.
+func ProcessesUnder(dir string) []string {
+	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil
+	}
+	prefix := strings.ToLower(strings.TrimRight(abs, `\/`)) + `\`
+	seen := map[string]bool{}
+	var out []string
+	walkProcesses(func(string) bool { return true }, func(_ uint32, path string) {
+		if strings.HasPrefix(strings.ToLower(path), prefix) && !seen[strings.ToLower(path)] {
+			seen[strings.ToLower(path)] = true
+			out = append(out, path)
+		}
+	})
+	return out
+}
+
+// walkProcesses calls fn with the pid and full image path of every process
+// whose exe name passes want and whose path can be read.
+func walkProcesses(want func(name string) bool, fn func(pid uint32, path string)) {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return
 	}
 	defer windows.CloseHandle(snap)
 	var pe windows.ProcessEntry32
 	pe.Size = uint32(unsafe.Sizeof(pe))
-	var out []uint32
 	for err = windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
-		if !strings.EqualFold(windows.UTF16ToString(pe.ExeFile[:]), filepath.Base(want)) {
+		if !want(windows.UTF16ToString(pe.ExeFile[:])) {
 			continue
 		}
 		h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pe.ProcessID)
@@ -196,12 +227,11 @@ func processesAt(exe string) []uint32 {
 		}
 		buf := make([]uint16, windows.MAX_LONG_PATH)
 		n := uint32(len(buf))
-		if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) == nil && strings.EqualFold(windows.UTF16ToString(buf[:n]), want) {
-			out = append(out, pe.ProcessID)
+		if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) == nil {
+			fn(pe.ProcessID, windows.UTF16ToString(buf[:n]))
 		}
 		windows.CloseHandle(h)
 	}
-	return out
 }
 
 // StartupExe is the program the sign-in entry starts, or "" when there is
