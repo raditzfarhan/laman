@@ -114,6 +114,9 @@ func buildImportPlan(from string) (importPlan, string, error) {
 		names = nil
 	}
 	plan := laragon.BuildPlan(l, cfg, names, runningServers(l))
+	if derr == nil {
+		laragon.NoteInterrupted(&plan, names) // only the command clears the record
+	}
 	return importPlan{Plan: plan, MariaDBOff: derr != nil}, l.Root, nil
 }
 

@@ -4,6 +4,7 @@
 package laragon
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -27,8 +28,14 @@ type Laragon struct {
 	// MySQLBin is <Root>\bin\mysql\<Version>\bin; MySQLData is the data
 	// folder of that major.minor. Both are empty when MySQL isn't set up.
 	MySQLBin, MySQLData string
-	VHosts              []VHost
+	// MariaDB: Laragon is set to MariaDB (a bin\mysql\mariadb-* folder),
+	// which the import cannot copy from yet.
+	MariaDB bool
+	VHosts  []VHost
 }
+
+// ErrMariaDB: Laragon runs MariaDB, not MySQL; its databases aren't copied.
+var ErrMariaDB = errors.New("Laragon's MariaDB isn't supported yet; only MySQL")
 
 // VHost is one site Laragon serves.
 type VHost struct {
@@ -66,6 +73,7 @@ func Find(root string) (*Laragon, error) {
 	if v := cfg["mysql"]["version"]; v != "" {
 		l.MySQLVersion = v
 		l.MySQLBin = filepath.Join(root, "bin", "mysql", v, "bin")
+		l.MariaDB = strings.HasPrefix(strings.ToLower(v), "mariadb")
 		if m := versionRe.FindStringSubmatch(v); m != nil {
 			l.MySQLData = filepath.Join(l.DataDir, "mysql-"+m[1])
 		}

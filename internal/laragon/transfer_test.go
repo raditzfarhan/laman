@@ -395,3 +395,36 @@ func TestSourceStops(t *testing.T) {
 		t.Errorf("credentials file %s still exists", cnf)
 	}
 }
+
+func TestStartSourceRefusesMariaDB(t *testing.T) {
+	l := &Laragon{MariaDB: true, MySQLBin: `C:\nowhere\bin`, MySQLData: `C:\nowhere\data`}
+	if _, err := StartSource(l, ""); !errors.Is(err, ErrMariaDB) {
+		t.Fatalf("StartSource = %v, want ErrMariaDB", err)
+	}
+}
+
+func TestRemoveStaleDirs(t *testing.T) {
+	tmp := t.TempDir()
+	mk := func(name, pid string) string {
+		d := filepath.Join(tmp, name)
+		os.MkdirAll(d, 0o755)
+		os.WriteFile(filepath.Join(d, "client.cnf"), []byte("[client]\npassword=x\n"), 0o600)
+		if pid != "" {
+			os.WriteFile(filepath.Join(d, "mysqld.pid"), []byte(pid+"\n"), 0o644)
+		}
+		return d
+	}
+	noPid := mk(tempPrefix+"1", "")
+	dead := mk(tempPrefix+"2", "111")
+	live := mk(tempPrefix+"3", "222")
+	other := mk("someone-else", "")
+	removeStaleDirs(tmp, func(pid int) bool { return pid == 222 })
+	for d, want := range map[string]bool{noPid: false, dead: false, live: true, other: true} {
+		if _, err := os.Stat(d); (err == nil) != want {
+			t.Errorf("%s exists = %v, want %v", filepath.Base(d), err == nil, want)
+		}
+	}
+	if !processAlive(os.Getpid()) {
+		t.Error("processAlive(own pid) = false")
+	}
+}

@@ -265,3 +265,19 @@ func TestImportBusyKeepsResult(t *testing.T) {
 		t.Errorf("result deleted by a refused POST: %v", err)
 	}
 }
+
+// The plan names a database an interrupted import may have half-loaded,
+// and leaves the record for the command to clear.
+func TestImportPlanNotesInterruptedCopy(t *testing.T) {
+	f := newImportFixture(t, []string{"acme"}, nil)
+	if err := laragon.MarkCopying("acme"); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.do("GET", "/api/import/laragon?from="+f.root, "")
+	if !strings.Contains(rec.Body.String(), `"notes":["acme may be incomplete from an interrupted import`) {
+		t.Errorf("plan lacks the note: %s", rec.Body)
+	}
+	if _, err := os.Stat(filepath.Join(config.LogDir(), "import-laragon.copying")); err != nil {
+		t.Errorf("the plan removed the record: %v", err)
+	}
+}

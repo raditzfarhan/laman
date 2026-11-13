@@ -30,6 +30,10 @@ type importOpts struct {
 	DryRun, Yes bool
 	NoDB        bool
 	DBs         []string
+	// Password is Laragon's MySQL root password from LAMAN_LARAGON_PASSWORD;
+	// HasPassword when that was set (the CLI then never prompts).
+	Password    string
+	HasPassword bool
 }
 
 // importResult is what an import did; it is written to
@@ -46,6 +50,7 @@ type importResult struct {
 	Renamed       []laragon.Rename  `json:"renamed"`
 	ByHand        []string          `json:"byHand"`
 	PHP           []laragon.SiteFit `json:"php"`
+	Notes         []string          `json:"notes"`
 	NeedsPassword bool              `json:"needsPassword"`
 }
 
@@ -232,6 +237,9 @@ func printPlan(w io.Writer, p laragon.Plan, selected []string) error {
 			fmt.Fprintf(w, "  [ ] %s (%s)\n", d.Name, sizeLabel(d.Size))
 		}
 	}
+	for _, n := range p.Notes {
+		fmt.Fprintf(w, "  Note: %s\n", n)
+	}
 	if len(p.PHP) > 0 {
 		fmt.Fprintln(w, "\nPHP (suggestions; nothing is changed):")
 		for _, f := range p.PHP {
@@ -408,6 +416,9 @@ func lamanDatabases(cfg *config.Config) ([]string, error) {
 	return names, nil
 }
 
+// listLamanDBs is lamanDatabases; tests replace it.
+var listLamanDBs = lamanDatabases
+
 const mariaDBDown = "laman's MariaDB is not running; start laman (laman start) and turn MariaDB on (laman enable mariadb)"
 
 // lenientWriter writes to every writer, ignoring their errors (stdout may
@@ -421,11 +432,20 @@ func (m lenientWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// takePassword reads Laragon's MySQL password from the environment and
+// removes it there, so no child process (mysqld, the MariaDB client, the
+// daemon notification) inherits it.
+func takePassword(o *importOpts) {
+	o.Password, o.HasPassword = os.LookupEnv(passwordEnv)
+	os.Unsetenv(passwordEnv)
+}
+
 func cmdImport(args []string) error {
 	o, err := parseImportArgs(args)
 	if err != nil {
 		return err
 	}
+	takePassword(&o) // before any child process starts
 	if o.DryRun {
 		return runImport(o, os.Stdout)
 	}
@@ -455,8 +475,17 @@ func runImport(o importOpts, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	lamanDBs, dbErr := lamanDatabases(cfg)
+	if l.MariaDB && o.DBs != nil {
+		return laragon.ErrMariaDB
+	}
+	lamanDBs, dbErr := listLamanDBs(cfg)
 	p := laragon.BuildPlan(l, cfg, lamanDBs, l.RunningServers())
+	if dbErr == nil {
+		laragon.NoteInterrupted(&p, lamanDBs)
+		if !o.DryRun {
+			laragon.ClearCopying() // reported once; laman's databases were checked
+		}
+	}
 	selected, err := chooseDBs(p, o)
 	if err != nil {
 		return err
@@ -480,6 +509,10 @@ func runImport(o importOpts, out io.Writer) error {
 	}
 	if !todo {
 		fmt.Fprintln(out, "\nNothing to import.")
+		// Home stops offering an import that has nothing left to do.
+		if err := setNoticeImported(); err != nil {
+			fmt.Fprintf(out, "Could not save the config: %v\n", err)
+		}
 		return nil
 	}
 	if !o.Yes {
@@ -496,7 +529,7 @@ func runImport(o importOpts, out io.Writer) error {
 
 	res := importResult{Folders: []string{}, Links: []string{}, Copied: []string{}, Skipped: []string{},
 		Failed: map[string]string{}, Renamed: append([]laragon.Rename{}, p.Renamed...), ByHand: []string{},
-		PHP: append([]laragon.SiteFit{}, p.PHP...)}
+		PHP: append([]laragon.SiteFit{}, p.PHP...), Notes: append([]string{}, p.Notes...)}
 	for _, d := range p.DBs {
 		if d.Exists {
 			res.Skipped = append(res.Skipped, d.Name)
@@ -510,15 +543,9 @@ func runImport(o importOpts, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cancelled := copyDatabases(l, cfg, p, selected, &res, out)
+	cancelled := copyDatabases(l, cfg, p, selected, o, &res, out)
 	if !cancelled {
-		// Reload: the dashboard may have changed the config meanwhile.
-		c, err := config.Load()
-		if err == nil {
-			c.LaragonNotice = "imported"
-			err = c.Save()
-		}
-		if err != nil {
+		if err := setNoticeImported(); err != nil {
 			res.Failed[failConfig(config.Path())] = err.Error()
 			fmt.Fprintf(out, "Could not save the config: %v\n", err)
 		}
@@ -530,10 +557,21 @@ func runImport(o importOpts, out io.Writer) error {
 	return importOutcome(res, cancelled)
 }
 
+// setNoticeImported records that the import ran, so Home stops offering
+// it. It reloads the config: the dashboard may have changed it meanwhile.
+func setNoticeImported() error {
+	c, err := config.Load()
+	if err == nil {
+		c.LaragonNotice = "imported"
+		err = c.Save()
+	}
+	return err
+}
+
 // copyDatabases copies selected from Laragon's MySQL into laman's MariaDB.
 // Laragon's mysqld is stopped on every path, Ctrl+C included. It reports
 // whether the user cancelled.
-func copyDatabases(l *laragon.Laragon, cfg *config.Config, p laragon.Plan, selected []string, res *importResult, out io.Writer) (cancelled bool) {
+func copyDatabases(l *laragon.Laragon, cfg *config.Config, p laragon.Plan, selected []string, o importOpts, res *importResult, out io.Writer) (cancelled bool) {
 	if len(selected) == 0 {
 		return false
 	}
@@ -580,9 +618,9 @@ func copyDatabases(l *laragon.Laragon, cfg *config.Config, p laragon.Plan, selec
 	}()
 	isInterrupted := func() bool { mu.Lock(); defer mu.Unlock(); return interrupted }
 
-	password, fromEnv := os.LookupEnv(passwordEnv)
+	password := o.Password
 	var prompt func() (string, error)
-	if !fromEnv && term.IsTerminal(int(os.Stdin.Fd())) {
+	if !o.HasPassword && term.IsTerminal(int(os.Stdin.Fd())) {
 		prompt = func() (string, error) {
 			fmt.Print("Laragon's MySQL asks for root's password: ")
 			b, err := term.ReadPassword(int(os.Stdin.Fd()))
@@ -623,7 +661,13 @@ func copyDatabases(l *laragon.Laragon, cfg *config.Config, p laragon.Plan, selec
 			continue
 		}
 		fmt.Fprintf(out, "Copying %s (%s)…\n", n, sizeLabel(size[n]))
-		if err := laragon.Copy(s, target, n, out); err != nil {
+		// Should laman kill this run mid-copy, the next plan says n may be incomplete.
+		if err := laragon.MarkCopying(n); err != nil {
+			fmt.Fprintf(out, "  could not record the copy in progress: %v\n", err)
+		}
+		err := laragon.Copy(s, target, n, out)
+		laragon.ClearCopying()
+		if err != nil {
 			if isInterrupted() {
 				res.Failed[failDB(n)] = "cancelled"
 			} else {
@@ -678,6 +722,9 @@ func printSummary(w io.Writer, res importResult) {
 		for _, b := range res.ByHand {
 			fmt.Fprintf(w, "    %s\n", b)
 		}
+	}
+	for _, n := range res.Notes {
+		fmt.Fprintf(w, "  Note: %s\n", n)
 	}
 	if len(res.PHP) > 0 {
 		fmt.Fprintln(w, "  PHP:")

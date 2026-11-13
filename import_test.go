@@ -375,3 +375,114 @@ func TestImportResultJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestTakePasswordUnsetsEnv(t *testing.T) {
+	t.Setenv(passwordEnv, "s3cret")
+	var o importOpts
+	takePassword(&o)
+	if o.Password != "s3cret" || !o.HasPassword {
+		t.Errorf("opts = %+v", o)
+	}
+	if _, ok := os.LookupEnv(passwordEnv); ok {
+		t.Error("the password is still in the environment")
+	}
+	o = importOpts{}
+	takePassword(&o)
+	if o.HasPassword {
+		t.Error("HasPassword without the variable")
+	}
+}
+
+// A run with nothing left to import still stops Home offering it.
+func TestRunImportNothingToImportSetsNotice(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LAMAN_HOME", filepath.Join(home, ".laman"))
+	root := filepath.Join(home, "laragon")
+	www := filepath.Join(root, "www")
+	if err := os.MkdirAll(www, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "laragon.exe"), nil, 0o644)
+	cfg := config.Default()
+	cfg.SitesDir = filepath.Join(home, "Sites")
+	cfg.MoreSitesDirs = []string{www}
+	cfg.MySQLPort = 1 // laman's MariaDB doesn't answer; Laragon has no databases anyway
+	cfg.ControlPort = 1
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runImport(importOpts{From: root, Yes: true}, &out); err != nil {
+		t.Fatalf("runImport: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "Nothing to import.") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+	got, err := config.Load()
+	if err != nil || got.LaragonNotice != "imported" {
+		t.Errorf("notice = %q, %v", got.LaragonNotice, err)
+	}
+}
+
+func TestPrintPlanAndSummaryNotes(t *testing.T) {
+	p := testPlan()
+	p.Notes = []string{"acme may be incomplete from an interrupted import — drop it in laman and import again."}
+	var b bytes.Buffer
+	if err := printPlan(&b, p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "Note: acme may be incomplete") {
+		t.Errorf("plan output lacks the note:\n%s", b.String())
+	}
+	b.Reset()
+	printSummary(&b, importResult{Notes: p.Notes})
+	if !strings.Contains(b.String(), "Note: acme may be incomplete") {
+		t.Errorf("summary lacks the note:\n%s", b.String())
+	}
+}
+
+// A database an earlier run was copying when it was killed is reported
+// (never dropped) and the record is cleared by a real run, not a dry run.
+func TestRunImportReportsInterruptedCopy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LAMAN_HOME", filepath.Join(home, ".laman"))
+	root := filepath.Join(home, "laragon")
+	www := filepath.Join(root, "www")
+	os.MkdirAll(www, 0o755)
+	os.WriteFile(filepath.Join(root, "laragon.exe"), nil, 0o644)
+	cfg := config.Default()
+	cfg.SitesDir = filepath.Join(home, "Sites")
+	cfg.MoreSitesDirs = []string{www}
+	cfg.ControlPort = 1
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	old := listLamanDBs
+	listLamanDBs = func(*config.Config) ([]string, error) { return []string{"mysql", "acme"}, nil }
+	t.Cleanup(func() { listLamanDBs = old })
+	if err := laragon.MarkCopying("acme"); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(config.LogDir(), "import-laragon.copying")
+
+	var out bytes.Buffer
+	if err := runImport(importOpts{From: root, DryRun: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "acme may be incomplete from an interrupted import") {
+		t.Errorf("dry run lacks the note:\n%s", out.String())
+	}
+	if _, err := os.Stat(record); err != nil {
+		t.Errorf("dry run removed the record: %v", err)
+	}
+	out.Reset()
+	if err := runImport(importOpts{From: root, Yes: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "acme may be incomplete from an interrupted import") {
+		t.Errorf("run lacks the note:\n%s", out.String())
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Errorf("record kept after a run: %v", err)
+	}
+}

@@ -1440,6 +1440,7 @@ function importPlan(p, tld) {
           el("button", { class: "linkish", onclick: () => setAll(false) }, "None")) : null),
       off ? el("div", { class: "note" }, el("span", {}, "laman's MariaDB isn't running, so databases can't be copied now. ",
         el("a", { href: "#services" }, "Start it in Services"), ", then come back.")) : null,
+      (p.notes || []).map((n) => el("div", { class: "note" }, el("span", {}, n))),
       el("div", { class: "panel" }, dbRows.length ? dbRows : el("div", { class: "empty-state" }, "Laragon has no databases of its own."))),
     importPHP(p.php, false),
   ].filter(Boolean);
@@ -1516,6 +1517,7 @@ function importSummary(tld) {
     why ? el("p", { class: "why" }, why) : null,
     impGroup("Projects", null, projects),
     impGroup("Databases", null, dbs),
+    r?.notes?.length ? impGroup("Note", null, r.notes.map((n) => impRow(n, null, null, "warn"))) : null,
     r ? impGroup("Addresses that changed", null, r.renamed.map((x) => impRow([x.from, el("span", { class: "arrow", "aria-label": "becomes" }, "→"), x.to])), APP_URL_LINE) : null,
     r ? impGroup("Check by hand", null, r.byHand.map((v) => impRow(v))) : null,
     pw && imp.retryDBs.length ? pwForm : null,

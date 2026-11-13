@@ -30,6 +30,9 @@ type Plan struct {
 	// PHP lists imported sites whose composer.json rules out the PHP they
 	// would run on.
 	PHP []SiteFit `json:"php"`
+	// Notes are sentences about the databases the user should read: Laragon
+	// runs MariaDB, or a database may be half-copied by an earlier run.
+	Notes []string `json:"notes"`
 }
 
 // PlanFolder is a project folder to add; Already when laman has it.
@@ -182,7 +185,12 @@ func BuildPlan(l *Laragon, cfg *config.Config, lamanDBs []string, running []stri
 	for _, n := range lamanDBs {
 		have[strings.ToLower(n)] = true
 	}
-	dbs, _ := l.Databases()
+	var dbs []Database
+	if l.MariaDB {
+		p.Notes = append(p.Notes, ErrMariaDB.Error()+": its databases can't be copied; export them from Laragon by hand.")
+	} else {
+		dbs, _ = l.Databases()
+	}
 	for _, d := range dbs {
 		p.DBs = append(p.DBs, PlanDB{Name: d.Name, Size: d.Size, Exists: have[strings.ToLower(d.Name)], Copy: LooksLikeCopy(d.Name)})
 	}
@@ -210,6 +218,9 @@ func BuildPlan(l *Laragon, cfg *config.Config, lamanDBs []string, running []stri
 	}
 	if p.PHP == nil {
 		p.PHP = []SiteFit{}
+	}
+	if p.Notes == nil {
+		p.Notes = []string{}
 	}
 	return p
 }

@@ -70,6 +70,9 @@ var onStop func(path, output string)
 // 127.0.0.1 port, and waits until root can log in with password. It
 // returns ErrPassword when the password is refused.
 func StartSource(l *Laragon, password string) (*Source, error) {
+	if l.MariaDB {
+		return nil, ErrMariaDB
+	}
 	if l.MySQLBin == "" || l.MySQLData == "" {
 		return nil, errors.New("Laragon has no MySQL set up")
 	}
@@ -77,7 +80,8 @@ func StartSource(l *Laragon, password string) (*Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp("", "laman-laragon-")
+	removeStaleDirs(os.TempDir(), processAlive)
+	dir, err := os.MkdirTemp("", tempPrefix+"*")
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +131,42 @@ func (s *Source) stopWith(err error) error {
 		return errors.Join(err, serr)
 	}
 	return err
+}
+
+// tempPrefix names the private temp folders StartSource makes (they hold
+// the credentials file and mysqld's pid file).
+const tempPrefix = "laman-laragon-"
+
+// removeStaleDirs deletes the private folders earlier runs left behind
+// when they were killed. A folder whose mysqld.pid names a live process
+// belongs to a running import and is kept.
+func removeStaleDirs(tmp string, alive func(pid int) bool) {
+	dirs, _ := filepath.Glob(filepath.Join(tmp, tempPrefix+"*"))
+	for _, d := range dirs {
+		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
+			continue
+		}
+		if b, err := os.ReadFile(filepath.Join(d, "mysqld.pid")); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && alive(pid) {
+				continue
+			}
+		}
+		os.RemoveAll(d)
+	}
+}
+
+// processAlive reports whether a process with this pid is running.
+func processAlive(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if windows.GetExitCodeProcess(h, &code) != nil {
+		return false
+	}
+	return code == 259 // STILL_ACTIVE
 }
 
 var mysqlVersion = regexp.MustCompile(`^mysql-(\d+)\.(\d+)\.(\d+)`)
