@@ -17,11 +17,11 @@ func runFilter(t *testing.T, in string) string {
 
 func TestFilterCollations(t *testing.T) {
 	cases := map[string]string{
-		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;": ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;",
-		"  `a` varchar(9) COLLATE utf8mb4_0900_as_ci NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_ci NOT NULL,",
-		"  `a` varchar(9) COLLATE utf8mb4_0900_as_cs NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_cs NOT NULL,",
-		"  `a` varchar(9) COLLATE utf8mb4_0900_bin NOT NULL,":                 "  `a` varchar(9) COLLATE utf8mb4_bin NOT NULL,",
-		"  `a` varchar(9) COLLATE utf8mb4_ja_0900_as_cs NOT NULL,":            "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_cs NOT NULL,",
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;": ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_nopad_ai_ci;",
+		"  `a` varchar(9) COLLATE utf8mb4_0900_as_ci NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_uca1400_nopad_as_ci NOT NULL,",
+		"  `a` varchar(9) COLLATE utf8mb4_0900_as_cs NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_uca1400_nopad_as_cs NOT NULL,",
+		"  `a` varchar(9) COLLATE utf8mb4_0900_bin NOT NULL,":                 "  `a` varchar(9) COLLATE utf8mb4_nopad_bin NOT NULL,",
+		"  `a` varchar(9) COLLATE utf8mb4_ja_0900_as_cs NOT NULL,":            "  `a` varchar(9) COLLATE utf8mb4_uca1400_nopad_as_cs NOT NULL,",
 		"  `a` varchar(9) COLLATE utf8mb4_unicode_ci NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_unicode_ci NOT NULL,",
 	}
 	for in, want := range cases {
@@ -75,7 +75,7 @@ func TestFilterLeavesDataAlone(t *testing.T) {
 
 func TestFilterPreservesLineEndings(t *testing.T) {
 	in := "a utf8mb4_0900_bin\r\nb\nINSERT INTO `t` VALUES ('\r');\r\nlast utf8mb4_0900_bin"
-	want := "a utf8mb4_bin\r\nb\nINSERT INTO `t` VALUES ('\r');\r\nlast utf8mb4_bin"
+	want := "a utf8mb4_nopad_bin\r\nb\nINSERT INTO `t` VALUES ('\r');\r\nlast utf8mb4_nopad_bin"
 	if got := runFilter(t, in); got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -112,13 +112,13 @@ func TestFilterInsertVariants(t *testing.T) {
 func TestFilterSkipsQuotedLiterals(t *testing.T) {
 	cases := [][2]string{
 		{"  `note` varchar(20) COLLATE utf8mb4_0900_ai_ci DEFAULT 'utf8mb4_0900_ai_ci' COMMENT 'see DEFINER=`a`@`b` /*!80016 x */',\n",
-			"  `note` varchar(20) COLLATE utf8mb4_uca1400_ai_ci DEFAULT 'utf8mb4_0900_ai_ci' COMMENT 'see DEFINER=`a`@`b` /*!80016 x */',\n"},
+			"  `note` varchar(20) COLLATE utf8mb4_uca1400_nopad_ai_ci DEFAULT 'utf8mb4_0900_ai_ci' COMMENT 'see DEFINER=`a`@`b` /*!80016 x */',\n"},
 		// backslash escape and doubled quote
-		{"x 'it''s \x5c' utf8mb4_0900_bin' y utf8mb4_0900_bin\n", "x 'it''s \x5c' utf8mb4_0900_bin' y utf8mb4_bin\n"},
+		{"x 'it''s \x5c' utf8mb4_0900_bin' y utf8mb4_0900_bin\n", "x 'it''s \x5c' utf8mb4_0900_bin' y utf8mb4_nopad_bin\n"},
 		// quotes inside versioned comments, kept and removed
 		{"a /*!40100 DEFAULT 'x' */ /*!80016 DEFAULT ENCRYPTION='N' */;\n", "a /*!40100 DEFAULT 'x' */ ;\n"},
 		// apostrophes in backticks and -- comments do not open a literal
-		{"-- it's\nCREATE TABLE `it's` (a int) COLLATE=utf8mb4_0900_bin;\n", "-- it's\nCREATE TABLE `it's` (a int) COLLATE=utf8mb4_bin;\n"},
+		{"-- it's\nCREATE TABLE `it's` (a int) COLLATE=utf8mb4_0900_bin;\n", "-- it's\nCREATE TABLE `it's` (a int) COLLATE=utf8mb4_nopad_bin;\n"},
 	}
 	for _, c := range cases {
 		if got := runFilter(t, c[0]); got != c[1] {
@@ -129,7 +129,7 @@ func TestFilterSkipsQuotedLiterals(t *testing.T) {
 
 func TestFilterMultilineLiteral(t *testing.T) {
 	in := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\n  INSERT INTO z' COLLATE utf8mb4_0900_bin;\nnext utf8mb4_0900_bin\n"
-	want := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\n  INSERT INTO z' COLLATE utf8mb4_bin;\nnext utf8mb4_bin\n"
+	want := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\n  INSERT INTO z' COLLATE utf8mb4_nopad_bin;\nnext utf8mb4_nopad_bin\n"
 	if got := runFilter(t, in); got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -151,20 +151,20 @@ func TestFilterPhantomLiteralDoesNotStick(t *testing.T) {
 		}
 	}
 	// stuck state heals at DELIMITER / section comments / data lines
-	if got := runFilter(t, "SELECT 'oops\nDELIMITER ;;\nx utf8mb4_0900_bin\n"); got != "SELECT 'oops\nDELIMITER ;;\nx utf8mb4_bin\n" {
+	if got := runFilter(t, "SELECT 'oops\nDELIMITER ;;\nx utf8mb4_0900_bin\n"); got != "SELECT 'oops\nDELIMITER ;;\nx utf8mb4_nopad_bin\n" {
 		t.Errorf("DELIMITER heal: %q", got)
 	}
-	if got := runFilter(t, "SELECT 'oops\n-- Dumping\nx utf8mb4_0900_bin\n"); got != "SELECT 'oops\n-- Dumping\nx utf8mb4_bin\n" {
+	if got := runFilter(t, "SELECT 'oops\n-- Dumping\nx utf8mb4_0900_bin\n"); got != "SELECT 'oops\n-- Dumping\nx utf8mb4_nopad_bin\n" {
 		t.Errorf("-- heal: %q", got)
 	}
-	if got := runFilter(t, "SELECT 'oops\n"+ins+"x utf8mb4_0900_bin\n"); got != "SELECT 'oops\n"+ins+"x utf8mb4_bin\n" {
+	if got := runFilter(t, "SELECT 'oops\n"+ins+"x utf8mb4_0900_bin\n"); got != "SELECT 'oops\n"+ins+"x utf8mb4_nopad_bin\n" {
 		t.Errorf("INSERT heal: %q", got)
 	}
 }
 
 func TestFilterVersionedCommentLiteralProtected(t *testing.T) {
 	in := "/*!50003 SET x = 'utf8mb4_0900_bin' */ utf8mb4_0900_bin;\n"
-	want := "/*!50003 SET x = 'utf8mb4_0900_bin' */ utf8mb4_bin;\n"
+	want := "/*!50003 SET x = 'utf8mb4_0900_bin' */ utf8mb4_nopad_bin;\n"
 	if got := runFilter(t, in); got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -172,7 +172,7 @@ func TestFilterVersionedCommentLiteralProtected(t *testing.T) {
 
 func TestFilterDoubleQuotedStringProtected(t *testing.T) {
 	in := "SELECT \"utf8mb4_0900_bin \"\"q\"\"\" , utf8mb4_0900_bin;\n"
-	want := "SELECT \"utf8mb4_0900_bin \"\"q\"\"\" , utf8mb4_bin;\n"
+	want := "SELECT \"utf8mb4_0900_bin \"\"q\"\"\" , utf8mb4_nopad_bin;\n"
 	if got := runFilter(t, in); got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -180,13 +180,13 @@ func TestFilterDoubleQuotedStringProtected(t *testing.T) {
 
 func TestFilterLanguageCollations(t *testing.T) {
 	cases := map[string]string{
-		"utf8mb4_ja_0900_as_cs":      "utf8mb4_uca1400_as_cs",
-		"utf8mb4_ja_0900_as_cs_ks":   "utf8mb4_uca1400_as_cs",
-		"utf8mb4_zh_0900_as_cs":      "utf8mb4_uca1400_as_cs",
-		"utf8mb4_de_pb_0900_ai_ci":   "utf8mb4_uca1400_ai_ci",
-		"utf8mb4_es_trad_0900_as_ci": "utf8mb4_uca1400_as_ci",
-		"utf8mb4_sr_latn_0900_ai_ci": "utf8mb4_uca1400_ai_ci",
-		"utf8mb4_ru_0900_as_cs":      "utf8mb4_uca1400_as_cs",
+		"utf8mb4_ja_0900_as_cs":      "utf8mb4_uca1400_nopad_as_cs",
+		"utf8mb4_ja_0900_as_cs_ks":   "utf8mb4_uca1400_nopad_as_cs",
+		"utf8mb4_zh_0900_as_cs":      "utf8mb4_uca1400_nopad_as_cs",
+		"utf8mb4_de_pb_0900_ai_ci":   "utf8mb4_uca1400_nopad_ai_ci",
+		"utf8mb4_es_trad_0900_as_ci": "utf8mb4_uca1400_nopad_as_ci",
+		"utf8mb4_sr_latn_0900_ai_ci": "utf8mb4_uca1400_nopad_ai_ci",
+		"utf8mb4_ru_0900_as_cs":      "utf8mb4_uca1400_nopad_as_cs",
 	}
 	for in, want := range cases {
 		line := "  `a` varchar(9) COLLATE " + in + " NOT NULL,\n"
@@ -200,7 +200,7 @@ func TestFilterLanguageCollations(t *testing.T) {
 	}
 	// a quoted literal keeps the original name
 	in := "  `a` varchar(9) COLLATE utf8mb4_ja_0900_as_cs DEFAULT 'utf8mb4_ja_0900_as_cs',\n"
-	want := "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_cs DEFAULT 'utf8mb4_ja_0900_as_cs',\n"
+	want := "  `a` varchar(9) COLLATE utf8mb4_uca1400_nopad_as_cs DEFAULT 'utf8mb4_ja_0900_as_cs',\n"
 	if got := runFilter(t, in); got != want {
 		t.Errorf("got %q want %q", got, want)
 	}

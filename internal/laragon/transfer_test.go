@@ -43,11 +43,11 @@ func TestSourceWrongPassword(t *testing.T) {
 
 func TestMapCollation(t *testing.T) {
 	cases := map[string]string{
-		"utf8mb4_0900_ai_ci":       "utf8mb4_uca1400_ai_ci",
-		"utf8mb4_0900_bin":         "utf8mb4_bin",
-		"utf8mb4_ja_0900_as_cs":    "utf8mb4_uca1400_as_cs",
-		"utf8mb4_de_pb_0900_ai_ci": "utf8mb4_uca1400_ai_ci",
-		"utf8mb4_0900_as_cs_x":     "utf8mb4_uca1400_ai_ci",
+		"utf8mb4_0900_ai_ci":       "utf8mb4_uca1400_nopad_ai_ci",
+		"utf8mb4_0900_bin":         "utf8mb4_nopad_bin",
+		"utf8mb4_ja_0900_as_cs":    "utf8mb4_uca1400_nopad_as_cs",
+		"utf8mb4_de_pb_0900_ai_ci": "utf8mb4_uca1400_nopad_ai_ci",
+		"utf8mb4_0900_as_cs_x":     "utf8mb4_uca1400_nopad_ai_ci",
 		"utf8mb4_unicode_ci":       "utf8mb4_unicode_ci",
 		"latin1_swedish_ci":        "latin1_swedish_ci",
 	}
@@ -244,6 +244,10 @@ func TestCopyRoundTrip(t *testing.T) {
 		"ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;\n" +
 		"INSERT INTO notes (body, meta) VALUES ('" + strings.ReplaceAll(strings.ReplaceAll(roundTripNote, `\`, `\\`), "'", "''") + "', '{\"a\": [1, 2], \"b\": \"x\"}');\n" +
 		"INSERT INTO notes (body, meta) VALUES ('second', NULL);\n" +
+		// 0900 collations are NO PAD: keys differing by a trailing space are distinct.
+		"CREATE TABLE tags (name VARCHAR(20) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY, code VARCHAR(20) COLLATE utf8mb4_0900_bin UNIQUE) " +
+		"ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;\n" +
+		"INSERT INTO tags VALUES ('acme', 'x'), ('acme ', 'x ');\n" +
 		"CREATE VIEW note_view AS SELECT id, body FROM notes;\n" +
 		"DELIMITER ;;\n" +
 		"CREATE PROCEDURE note_count(OUT c INT) BEGIN SELECT COUNT(*) INTO c FROM notes; END;;\n" +
@@ -273,6 +277,8 @@ func TestCopyRoundTrip(t *testing.T) {
 		}
 	}
 	check("SELECT COUNT(*) FROM "+db+".notes", "2")
+	check("SELECT COUNT(*) FROM "+db+".tags", "2")
+	check("SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '"+db+"' AND TABLE_NAME = 'tags' AND COLUMN_NAME = 'code'", "utf8mb4_nopad_bin")
 	check("SELECT HEX(body) FROM "+db+".notes WHERE id = 1", strings.ToUpper(hexOf(roundTripNote)))
 	check("SELECT JSON_VALUE(meta, '$.b') FROM "+db+".notes WHERE id = 1", "x")
 	check("SELECT COUNT(*) FROM information_schema.VIEWS WHERE TABLE_SCHEMA = '"+db+"' AND TABLE_NAME = 'note_view'", "1")
@@ -280,7 +286,7 @@ func TestCopyRoundTrip(t *testing.T) {
 	check("SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '"+db+"' AND ROUTINE_NAME = 'note_count'", "1")
 	check("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = '"+db+"' AND TRIGGER_NAME = 'note_bump'", "1")
 	check("SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA = '"+db+"' AND EVENT_NAME = 'note_sweep'", "1")
-	check("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '"+db+"'", "utf8mb4_uca1400_ai_ci")
+	check("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '"+db+"'", "utf8mb4_uca1400_nopad_ai_ci")
 }
 
 func hexOf(s string) string {

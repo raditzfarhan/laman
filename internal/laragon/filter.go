@@ -18,23 +18,25 @@ var (
 
 // mapCollation turns a MySQL 8 0900 collation (utf8mb4_0900_* or a
 // language one such as utf8mb4_ja_0900_as_cs) into the MariaDB one the dump
-// filter uses: utf8mb4_uca1400_<ai_ci|as_ci|as_cs>, utf8mb4_bin for
-// utf8mb4_0900_bin, utf8mb4_uca1400_ai_ci for anything else. Other names are
-// returned unchanged.
+// filter uses. The 0900 collations are NO PAD (trailing spaces count), so
+// they map to MariaDB's NO PAD ones, keeping unique keys and comparisons as
+// they were: utf8mb4_uca1400_nopad_<ai_ci|as_ci|as_cs>, utf8mb4_nopad_bin
+// for utf8mb4_0900_bin, utf8mb4_uca1400_nopad_ai_ci for anything else.
+// Other names are returned unchanged.
 func mapCollation(c string) string {
 	if collation0900.FindString(c) != c {
 		return c
 	}
 	if c == "utf8mb4_0900_bin" {
-		return "utf8mb4_bin"
+		return "utf8mb4_nopad_bin"
 	}
 	switch suffix := c[strings.Index(c, "0900_")+len("0900_"):]; suffix {
 	case "ai_ci", "as_ci", "as_cs":
-		return "utf8mb4_uca1400_" + suffix
+		return "utf8mb4_uca1400_nopad_" + suffix
 	case "as_cs_ks": // MariaDB has no kana-sensitive variant
-		return "utf8mb4_uca1400_as_cs"
+		return "utf8mb4_uca1400_nopad_as_cs"
 	}
-	return "utf8mb4_uca1400_ai_ci"
+	return "utf8mb4_uca1400_nopad_ai_ci"
 }
 
 // Filter copies a mysqldump stream from src to dst, rewriting the MySQL 8
