@@ -714,7 +714,7 @@ func cmdStatus() error {
 	tw.Flush()
 	fmt.Println()
 	https := st.HTTPSPort > 0 && st.HTTPSTrusted
-	printSites(st.Sites, siteURL(https, st.HTTPPort, st.HTTPSPort))
+	printSites(os.Stdout, st.Sites, siteURL(https, st.HTTPPort, st.HTTPSPort))
 	if len(st.Shares) > 0 {
 		fmt.Println()
 		for _, s := range st.Shares {
@@ -742,14 +742,16 @@ func siteURL(https bool, httpPort, httpsPort int) func(string) string {
 	return func(h string) string { return caddyconf.URL(h, false, httpPort) }
 }
 
-func printSites(list []sites.Site, url func(host string) string) {
+// printSites writes the sites table; a PHP site whose composer.json rules
+// out its PHP gets phpFitHint after its document root.
+func printSites(w io.Writer, list []sites.Site, url func(host string) string) {
 	if len(list) == 0 {
 		cfg, _ := config.Load()
-		fmt.Printf("No sites. Create a folder in %s, add a project folder with `laman folders add`, or run `laman link` in a project.\n", cfg.SitesDir)
+		fmt.Fprintf(w, "No sites. Create a folder in %s, add a project folder with `laman folders add`, or run `laman link` in a project.\n", cfg.SitesDir)
 		return
 	}
 	cfg, _ := config.Load()
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "SITE\tURL\tPHP\tDOCUMENT ROOT")
 	for _, s := range list {
 		name := s.Name
@@ -775,6 +777,8 @@ func printSites(list []sites.Site, url func(host string) string) {
 			php, root = "-", s.Path+"  (projects inside: `laman folders add` it)"
 		case sites.KindNone:
 			php, root = "-", s.Path+"  (not a website)"
+		case sites.KindPHP:
+			root += phpFitHint(s.PHPFit)
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, url(s.Host), php, root)
 	}
@@ -826,7 +830,7 @@ func cmdSites() error {
 			list[i].PHPFit = cfg.PHPFitFor(list[i].Name, list[i].Path, nil)
 		}
 	}
-	printSites(list, siteURL(https, cfg.HTTPPort, cfg.HTTPSPort))
+	printSites(os.Stdout, list, siteURL(https, cfg.HTTPPort, cfg.HTTPSPort))
 	return nil
 }
 

@@ -21,6 +21,14 @@ func TestInComposerRange(t *testing.T) {
 		{"8.3.0", "~8.2.0", false},
 		{"8.2.7", "8.2.*", true},
 		{"8.5.12-1", ">=8.2@stable", true},
+		// "|" without spaces must not swallow the alternatives around it.
+		{"8.5.1", "^7.2|^7.3", false},
+		{"8.5.1", "~7.3|~7.4", false},
+		{"8.5.1", "~7.4|~8.0.0", false},
+		{"8.5.1", "~7.4|~8.0", true}, // ~8.0 is >=8.0 <9.0
+		{"7.2.5", "^7.1.3|7.2.*", true},
+		{"8.0.1", "~7.4|~8.0", true},
+		{"8.5.1", "^7.4||^8.0", true},
 	}
 	for _, c := range cases {
 		in, ok := InComposerRange(c.v, c.rng)

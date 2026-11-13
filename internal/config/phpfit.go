@@ -47,26 +47,25 @@ func InComposerRange(v, rng string) (in, ok bool) {
 }
 
 func normalizeComposer(rng string) string {
-	// strip @stability flags
-	fields := strings.Fields(strings.ReplaceAll(rng, ",", " "))
-	for i, f := range fields {
-		if k := strings.Index(f, "@"); k >= 0 {
-			fields[i] = f[:k]
+	// "|" and "||" both mean or, with or without spaces around them.
+	var alts []string
+	for _, alt := range strings.Split(strings.ReplaceAll(rng, "||", "|"), "|") {
+		var out []string
+		for _, f := range strings.Fields(strings.ReplaceAll(alt, ",", " ")) {
+			if k := strings.Index(f, "@"); k >= 0 { // strip @stability flags
+				f = f[:k]
+			}
+			switch {
+			case f == "":
+			case strings.HasPrefix(f, "~"):
+				out = append(out, tilde(f[1:])...)
+			default:
+				out = append(out, f)
+			}
 		}
+		alts = append(alts, strings.Join(out, " "))
 	}
-	var out []string
-	for _, f := range fields {
-		switch {
-		case f == "":
-		case strings.Contains(f, "|"):
-			out = append(out, "||") // "|" and "||" both mean or
-		case strings.HasPrefix(f, "~"):
-			out = append(out, tilde(f[1:])...)
-		default:
-			out = append(out, f)
-		}
-	}
-	return strings.Join(out, " ")
+	return strings.Join(alts, " || ")
 }
 
 // tilde turns Composer's ~X.Y into >=X.Y <X+1 and ~X.Y.Z into >=X.Y.Z <X.Y+1.
