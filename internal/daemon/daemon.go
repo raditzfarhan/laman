@@ -487,6 +487,7 @@ func (d *daemon) refresh() error {
 		}
 		s.PHP, need[v] = v, true
 		_, s.Isolated = d.cfg.Isolated[key]
+		fillPHPFit(d.cfg, &s, d.phpLines.cached())
 		list[i] = s
 	}
 	stalePools, err := d.reconcilePools(need)
@@ -774,4 +775,14 @@ func guard(next http.Handler, port int) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// fillPHPFit sets s.PHPFit for a PHP site (not a laman app) whose
+// composer.json rules out the PHP it runs on. lines are the installable PHP
+// lines already fetched, or nil.
+func fillPHPFit(cfg *config.Config, s *sites.Site, lines []string) {
+	if s.Kind != sites.KindPHP || s.App != "" {
+		return
+	}
+	s.PHPFit = cfg.PHPFitFor(s.Name, s.Path, lines)
 }

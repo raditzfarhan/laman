@@ -330,6 +330,20 @@ function rowEnds(s, open = true, share = null) {
     open ? el("a", { class: "icon open", href: url, target: "_blank", rel: "noopener", title: `Open ${s.host}`, "aria-label": `Open ${s.host}` }, icon("open")) : null);
 }
 
+// The PHP-fit warning for a site whose composer.json rules out the PHP it
+// runs on: a mark with the reason, and the one action that fixes it (use an
+// installed PHP, install one, or a note that none fits). Reused by the
+// Laragon import.
+function phpFitAction(siteName, fit) {
+  const tip = `${fit.from} asks for PHP ${fit.needs}; it runs on ${short(fit.runsOn)}`;
+  const action = fit.use
+    ? el("button", { class: "inline", title: tip, onclick: () => setSitePHP(siteName, fit.use) }, `Use PHP ${short(fit.use)}`)
+    : fit.install
+      ? el("button", { class: "inline", title: tip, onclick: () => act(() => api("POST", "/api/versions/install", { kind: "php", line: fit.install })) }, `Install PHP ${fit.install}`)
+      : el("span", { class: "fitnone", title: tip }, `No PHP laman offers fits ${fit.needs}`);
+  return el("span", { class: "phpfit" }, el("span", { class: "fitmark", title: tip, "aria-label": tip }, "!"), action);
+}
+
 function siteRow(s, installed, shares) {
     if (s.kind === "node") return nodeRow(s, shares);
     if (s.kind === "proxy" || s.kind === "group" || s.kind === "none") return plainRow(s);
@@ -344,7 +358,7 @@ function siteRow(s, installed, shares) {
         s.linked ? el("span", { class: "tag" }, "linked") : null,
         el("span", { class: "path", title: s.root }, shortPath(tidy(s.path)))),
       sel,
-      el("span"),
+      s.phpFit ? phpFitAction(s.name, s.phpFit) : el("span"),
       rowEnds(s, true, shareGroup(s, sh, false)),
       shareBlock(s, sh));
 }

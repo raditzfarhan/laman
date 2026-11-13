@@ -778,6 +778,30 @@ func printSites(list []sites.Site, url func(host string) string) {
 	tw.Flush()
 }
 
+// shortPHP drops the build suffix of an installed version (8.5.12-1 -> 8.5.12).
+func shortPHP(v string) string {
+	if i := strings.LastIndex(v, "-"); i > 0 {
+		return v[:i]
+	}
+	return v
+}
+
+// phpFitHint is the note `laman sites` appends to a site whose composer.json
+// rules out its PHP.
+func phpFitHint(f *sites.PHPFit) string {
+	if f == nil {
+		return ""
+	}
+	h := "  ! needs PHP " + f.Needs
+	switch {
+	case f.Use != "":
+		h += " (laman isolate " + shortPHP(f.Use) + ")"
+	case f.Install != "":
+		h += " (laman install php " + f.Install + ")"
+	}
+	return h
+}
+
 func cmdSites() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -791,7 +815,13 @@ func cmdSites() error {
 			}
 		}
 	}
-	printSites(discover(cfg), siteURL(https, cfg.HTTPPort, cfg.HTTPSPort))
+	list := discover(cfg)
+	for i := range list {
+		if list[i].Kind == sites.KindPHP && cfg.AppFor(list[i].Name) == "" {
+			list[i].PHPFit = cfg.PHPFitFor(list[i].Name, list[i].Path, nil)
+		}
+	}
+	printSites(list, siteURL(https, cfg.HTTPPort, cfg.HTTPSPort))
 	return nil
 }
 

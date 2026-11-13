@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// PHPFit: see config.PHPFit. Needs is the composer.json constraint, From
+// the file it came from, RunsOn the site's PHP, Use the newest installed
+// PHP that fits, Install the newest installable line that fits.
+type PHPFit struct {
+	Needs, From, RunsOn, Use, Install string
+}
+
 type Site struct {
 	Name   string `json:"name"`
 	Host   string `json:"host"`
@@ -19,6 +26,8 @@ type Site struct {
 	Front bool `json:"front"`
 	// PHP is the version serving the site; filled in by the daemon.
 	PHP string `json:"php,omitempty"`
+	// PHPFit is set when composer.json rules out the PHP the site runs on.
+	PHPFit *PHPFit `json:"phpFit,omitempty"`
 	// Isolated is true when the site is pinned with `laman isolate`.
 	Isolated bool `json:"isolated,omitempty"`
 	// App names the laman app this site serves (dbzuper, adminer, ...),

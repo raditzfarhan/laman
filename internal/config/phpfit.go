@@ -6,14 +6,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"laman/internal/sites"
 )
 
 // PHPFit describes a site whose composer.json PHP requirement the site's
 // current PHP does not meet. Use is the newest installed PHP that fits;
 // Install is the newest installable line that fits when none is installed.
-type PHPFit struct {
-	Needs, From, RunsOn, Use, Install string
-}
+// It lives in sites (Site carries it); config cannot be imported there.
+type PHPFit = sites.PHPFit
 
 // ComposerPHP reads a project's PHP requirement: config.platform.php, else
 // require.php. Both are "" when there is no composer.json or no constraint.

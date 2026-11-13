@@ -77,6 +77,13 @@ func (l *lines) get() ([]string, error) {
 	return list, nil
 }
 
+// cached returns the lines fetched so far without going to the network.
+func (l *lines) cached() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.list
+}
+
 func (d *daemon) dashboardRoutes(mux *http.ServeMux) {
 	serve := func(name, ctype string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
