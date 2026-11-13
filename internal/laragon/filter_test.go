@@ -45,7 +45,7 @@ func TestFilterVersionedComments(t *testing.T) {
 	}
 	// 6-digit versions
 	if got := runFilter(t, "a /*!100000 z */ b\n"); got != "a /*!100000 z */ b\n" {
-		t.Errorf("6-digit version 100000 is MariaDB-style, wait: got %q", got)
+		t.Errorf("6-digit version altered: %q", got)
 	}
 }
 
@@ -97,5 +97,40 @@ func TestFilterLongLine(t *testing.T) {
 	}
 	if out.String() != line {
 		t.Fatalf("long line altered (len %d vs %d)", out.Len(), len(line))
+	}
+}
+
+func TestFilterInsertVariants(t *testing.T) {
+	for _, p := range []string{"INSERT IGNORE INTO", "INSERT DELAYED INTO", "REPLACE INTO", "INSERT INTO"} {
+		line := p + " `notes` VALUES (1,'utf8mb4_0900_ai_ci DEFINER=`a`@`b` /*!80016 x */');\n"
+		if got := runFilter(t, line); got != line {
+			t.Errorf("%s altered: %q", p, got)
+		}
+	}
+}
+
+func TestFilterSkipsQuotedLiterals(t *testing.T) {
+	cases := [][2]string{
+		{"  `note` varchar(20) COLLATE utf8mb4_0900_ai_ci DEFAULT 'utf8mb4_0900_ai_ci' COMMENT 'see DEFINER=`a`@`b` /*!80016 x */',\n",
+			"  `note` varchar(20) COLLATE utf8mb4_uca1400_ai_ci DEFAULT 'utf8mb4_0900_ai_ci' COMMENT 'see DEFINER=`a`@`b` /*!80016 x */',\n"},
+		// backslash escape and doubled quote
+		{"x 'it''s \x5c' utf8mb4_0900_bin' y utf8mb4_0900_bin\n", "x 'it''s \x5c' utf8mb4_0900_bin' y utf8mb4_bin\n"},
+		// quotes inside versioned comments, kept and removed
+		{"a /*!40100 DEFAULT 'x' */ /*!80016 DEFAULT ENCRYPTION='N' */;\n", "a /*!40100 DEFAULT 'x' */ ;\n"},
+		// apostrophes in backticks and -- comments do not open a literal
+		{"-- it's\nCREATE TABLE `it's` (a int) COLLATE=utf8mb4_0900_bin;\n", "-- it's\nCREATE TABLE `it's` (a int) COLLATE=utf8mb4_bin;\n"},
+	}
+	for _, c := range cases {
+		if got := runFilter(t, c[0]); got != c[1] {
+			t.Errorf("in %q\n got %q\nwant %q", c[0], got, c[1])
+		}
+	}
+}
+
+func TestFilterMultilineLiteral(t *testing.T) {
+	in := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\nINSERT INTO z' COLLATE utf8mb4_0900_bin;\nnext utf8mb4_0900_bin\n"
+	want := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\nINSERT INTO z' COLLATE utf8mb4_bin;\nnext utf8mb4_bin\n"
+	if got := runFilter(t, in); got != want {
+		t.Errorf("got %q want %q", got, want)
 	}
 }
