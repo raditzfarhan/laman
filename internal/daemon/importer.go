@@ -33,8 +33,8 @@ type importPlan struct {
 var (
 	lamanDatabases = lamanDBNames
 	runningServers = (*laragon.Laragon).RunningServers
-	runImportJob   = func(d *daemon, args, env []string) error {
-		return d.runJobEnv("Importing from Laragon", args, env, func() { d.refresh() })
+	runImportJob   = func(d *daemon, args, env []string, before func()) error {
+		return d.runJobStart("Importing from Laragon", args, env, before, func() { d.refresh() })
 	}
 )
 
@@ -175,12 +175,14 @@ func (d *daemon) importRoutes(mux *http.ServeMux) {
 		}
 		// The password travels in the environment only: never in the
 		// arguments, which the job log prints.
-		os.Remove(filepath.Join(config.LogDir(), "import-laragon.json")) // /log must not show the previous run's result
 		var env []string
 		if req.Password != "" {
 			env = []string{"LAMAN_LARAGON_PASSWORD=" + req.Password}
 		}
-		if err := runImportJob(d, args, env); err != nil {
+		if err := runImportJob(d, args, env, func() {
+			// Only once the job is accepted: /log must not show the previous run's result.
+			os.Remove(filepath.Join(config.LogDir(), "import-laragon.json"))
+		}); err != nil {
 			fail(w, http.StatusConflict, "%v", err)
 			return
 		}

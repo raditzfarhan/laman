@@ -39,7 +39,10 @@ func newImportFixture(t *testing.T, lamanDBs []string, dbErr error) *importFixtu
 	oldDBs, oldRun, oldSrv := lamanDatabases, runImportJob, runningServers
 	t.Cleanup(func() { lamanDatabases, runImportJob, runningServers = oldDBs, oldRun, oldSrv })
 	lamanDatabases = func(*config.Config) ([]string, error) { return lamanDBs, dbErr }
-	runImportJob = func(d *daemon, args, env []string) error {
+	runImportJob = func(d *daemon, args, env []string, before func()) error {
+		if before != nil {
+			before()
+		}
 		f.args, f.env = args, env
 		f.ran++
 		return nil
@@ -234,5 +237,26 @@ func TestStatusLaragon(t *testing.T) {
 	cfg.Save()
 	if st := d.status().Laragon; st.Found || st.Notice {
 		t.Errorf("not found: %+v", st)
+	}
+}
+
+func TestImportBusyKeepsResult(t *testing.T) {
+	f := newImportFixture(t, nil, nil)
+	runImportJob = func(d *daemon, args, env []string, before func()) error {
+		return d.runJobStart("x", args, env, before, nil) // the real busy check
+	}
+	d := &daemon{cfg: config.Default()}
+	d.installJob.running = true
+	f.mux = http.NewServeMux()
+	d.importRoutes(f.mux)
+	os.MkdirAll(config.LogDir(), 0o755)
+	res := filepath.Join(config.LogDir(), "import-laragon.json")
+	os.WriteFile(res, []byte(`{}`), 0o644)
+	rec := f.do("POST", "/api/import/laragon", `{"from":`+quote(f.root)+`,"dbs":[]}`)
+	if rec.Code != 409 {
+		t.Errorf("busy: %d %s", rec.Code, rec.Body)
+	}
+	if _, err := os.Stat(res); err != nil {
+		t.Errorf("result deleted by a refused POST: %v", err)
 	}
 }

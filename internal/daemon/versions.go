@@ -229,6 +229,12 @@ func (d *daemon) runJob(title string, args []string, after func()) error {
 // child, added to the daemon's own. Use it for secrets, which must not appear
 // in arguments or logs.
 func (d *daemon) runJobEnv(title string, args, env []string, after func()) error {
+	return d.runJobStart(title, args, env, nil, after)
+}
+
+// runJobStart is runJobEnv with a before hook, run under the job lock once
+// the job is accepted (marked running) and never when it is refused as busy.
+func (d *daemon) runJobStart(title string, args, env []string, before, after func()) error {
 	j := &d.installJob
 	j.mu.Lock()
 	if j.running {
@@ -236,6 +242,9 @@ func (d *daemon) runJobEnv(title string, args, env []string, after func()) error
 		return errBusy
 	}
 	j.running, j.message, j.err = true, title+"…", ""
+	if before != nil {
+		before()
+	}
 	j.mu.Unlock()
 	go func() {
 		exe, err := os.Executable()
