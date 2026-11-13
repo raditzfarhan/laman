@@ -137,3 +137,46 @@ func TestPlanPHP(t *testing.T) {
 		t.Errorf("PHP = %+v", p.PHP)
 	}
 }
+
+func TestPlanLinkTakesOverFolderSite(t *testing.T) {
+	l, cfg := planFixture(t)
+	elsewhere := t.TempDir()
+	os.MkdirAll(filepath.Join(cfg.SitesDir, "docs"), 0o755)
+	linked := filepath.Join(elsewhere, "docs")
+	os.MkdirAll(linked, 0o755)
+	slash := filepath.ToSlash(linked)
+	write(t, filepath.Join(l.Root, "etc", "apache2", "sites-enabled", "custom2.conf"), autoConf("docs.test", slash))
+	l, _ = Find(l.Root)
+	p := BuildPlan(l, cfg, nil, nil)
+	found := false
+	for _, c := range p.Clashes {
+		if strings.Contains(c, `The link "docs"`) && strings.Contains(c, filepath.Join(cfg.SitesDir, "docs")) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Clashes = %q", p.Clashes)
+	}
+}
+
+func TestPlanSameRootLinkedOnce(t *testing.T) {
+	l, cfg := planFixture(t)
+	dir := filepath.ToSlash(filepath.Join(t.TempDir(), "blog"))
+	os.MkdirAll(dir, 0o755)
+	write(t, filepath.Join(l.Root, "etc", "apache2", "sites-enabled", "b1.conf"), autoConf("blog.local", dir))
+	write(t, filepath.Join(l.Root, "etc", "apache2", "sites-enabled", "b2.conf"), autoConf("blog2.local", dir))
+	l, _ = Find(l.Root)
+	p := BuildPlan(l, cfg, nil, nil)
+	n := 0
+	for _, k := range p.Links {
+		if k.Name == "blog" {
+			n++
+			if k.Taken {
+				t.Errorf("blog taken: %+v", k)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("Links = %+v", p.Links)
+	}
+}
