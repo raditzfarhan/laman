@@ -215,6 +215,9 @@ func run(c *AppCtx, dir string, name string, args ...string) error {
 	return nil
 }
 
+// SetEnv sets KEY=value lines in a .env file, adding missing ones.
+func SetEnv(path string, values map[string]string) error { return setEnv(path, values) }
+
 // setEnv sets KEY=value lines in a .env file, adding missing ones.
 func setEnv(path string, values map[string]string) error {
 	b, err := os.ReadFile(path)

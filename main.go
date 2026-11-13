@@ -50,6 +50,7 @@ Usage:
   laman php [args]                run the PHP CLI matching the site you're in
   laman composer [args]           run Composer with that PHP (installs Composer on first use)
   laman ext [--php 8.4]           list PHP extensions; ext enable|disable|install|uninstall <name>
+  laman new <name> [starter]      start a project: laravel, laravel-react|vue|livewire, wordpress, php, vite
   laman app [install|update|remove|open] <name>  web apps: dbzuper, adminer, phpmyadmin
   laman db                        open the default database app (https://db.test)
   laman xdebug on|off             turn Xdebug on/off for this folder's PHP (installs it once)
@@ -167,6 +168,8 @@ func main() {
 		err = cmdPsql(args)
 	case "redis", "redis-cli":
 		err = cmdRedis(args)
+	case "new":
+		err = cmdNew(args)
 	case "app", "apps":
 		err = cmdApp(args)
 	case "db":

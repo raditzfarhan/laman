@@ -74,6 +74,28 @@ In the dashboard, Home has a **Project folders** panel. **Add folder…** opens 
 - **Folders that hold projects** (`shop\api`, `shop\web-app`) are tagged **projects inside**. **Serve the projects inside** on Home adds that folder as a project folder, so each one gets its own address (`shop-api.test`). Opening `shop.test` explains the same.
 - **Not websites:** folders with no `index.php`, `index.html` or `package.json` dev script (Terraform, Docker, docs, notes) go into a folded **Not websites** group at the bottom of Home and the localhost page. Their address shows "Nothing to open here" instead of a bare 404. laman looks again whenever files change.
 
+## New projects
+
+`laman new` starts a project in your main project folder with laman's own PHP, Composer and Node, so it works at `<name>.test` right away:
+
+```
+laman new shop                         # Laravel, on laman's MariaDB
+laman new shop laravel-react           # or laravel-vue, laravel-livewire (the official starter kits)
+laman new blog wordpress
+laman new demo php                     # one index.php
+laman new ui vite                      # Vite; --template vue|svelte-ts|... (default react-ts)
+laman new shop --db postgres           # mariadb, postgres or sqlite
+laman new shop --php 8.4               # pin the new site to another installed PHP
+laman new api --in C:\laragon\www      # another of your project folders
+```
+
+In the dashboard, **New project** beside the site list does the same, with the address shown as you type.
+
+- **Laravel:** creates the database, points `.env` at it, at Mailpit and at laman's Redis, sets `APP_URL`, and runs the migrations. The starter kits also get `npm install` and a production build, so the page works without a dev server (`laman npm run dev` for hot reload). Laravel needs PHP 8.3 or newer.
+- **Database:** MariaDB when it is installed and on, else PostgreSQL, else SQLite. The database is named after the project (`acme-api` → `acme_api`); if one with that name exists, `laman new` stops before making anything.
+- **WordPress:** downloads the newest release (checked against wordpress.org's SHA-1), creates the MariaDB database and writes `wp-config.php` with fresh keys. Finish with WordPress's own setup at `https://<name>.test/wp-admin/install.php`.
+- **If it fails:** while the files are being made, the half-made folder is removed. A later step that fails (migrations, `npm install`) leaves the project and says what to run. The full output is in `~/.laman/logs/new.log`.
+
 ## JavaScript apps (dev servers)
 
 A Nuxt, Next.js, Vite, Quasar, Vue CLI, Astro or Node server project can't be served from its folder: it needs its dev server. laman finds these from `package.json` and runs the dev server for you, behind the project's `.test` name, with HTTPS and live reload.
@@ -333,6 +355,7 @@ The icon, tray mark and dashboard colours come from `../logo/kit` (see its `USAG
 | `laman php [args]` | Run the PHP CLI matching the site you are in, e.g. `laman php artisan migrate` |
 | `laman ext [--php 8.4]` | List PHP extensions; `laman ext enable\|disable\|install\|uninstall <name>` changes them (see [PHP extensions](#php-extensions)) |
 | `laman xdebug on\|off` | Turn Xdebug on or off for this folder's PHP (installs it the first time) |
+| `laman new <name> [starter]` | Start a project: `laravel` (default), `laravel-react\|vue\|livewire`, `wordpress`, `php`, `vite` (see [New projects](#new-projects)) |
 | `laman app [install\|update\|remove\|open\|default] <name>` | Web apps: dbzuper, adminer, phpmyadmin (see [Apps](#apps)) |
 | `laman db` | Open the default database app at `https://db.test` |
 | `laman composer [args]` | Run Composer with that same PHP, e.g. `laman composer create-project laravel/laravel blog`. Installs Composer (checksum-verified) on first use; `laman composer self-update` updates it |

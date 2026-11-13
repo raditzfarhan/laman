@@ -250,7 +250,7 @@ func (d *daemon) runJob(title string, args []string, after func()) error {
 		} else {
 			// The CLI's closing lines are terminal hints; here the lists
 			// update by themselves, so just say what happened.
-			j.message = strings.NewReplacer("Installing", "Installed", "Updating", "Updated", "Removing", "Removed").Replace(title)
+			j.message = strings.NewReplacer("Installing", "Installed", "Updating", "Updated", "Removing", "Removed", "Creating", "Created").Replace(title)
 		}
 		j.mu.Unlock()
 		if err == nil && after != nil {

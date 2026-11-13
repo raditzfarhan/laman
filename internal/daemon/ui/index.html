@@ -206,6 +206,24 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .tag.default { background: var(--accent); color: var(--accent-ink); }
 @media (max-width: 860px) { .app { grid-template-columns: 1fr; } .app .actions { justify-content: flex-start; } }
 
+/* ---- New project ---- */
+.sect-head .newbtn { margin-left: 10px; white-space: nowrap; }
+.sect-head .sitefind[hidden] + .newbtn { margin-left: auto; }
+.newproj { padding: 14px 18px 16px; margin-bottom: 12px; }
+.newproj h3 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.newproj .nfields { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+.newproj .nf { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.newproj .nf[hidden] { display: none; }
+.newproj .nname { flex: 1 1 200px; }
+.newproj .nname input { font: 14px var(--mono); color: var(--ink); background: var(--panel); border: 1px solid var(--field); border-radius: 7px; padding: 5px 10px; min-width: 0; }
+.newproj input:focus-visible, .newproj select:focus-visible { outline: 2px solid var(--genting); outline-offset: 1px; }
+.newproj input[aria-invalid=true] { border-color: var(--bad); }
+.newproj .naddr { margin: 10px 0 0; font-size: 13px; color: var(--muted); min-height: 1.5em; }
+.newproj .naddr .mono { color: var(--ink); }
+.newproj .naddr.err { color: var(--bad); }
+.newproj .nacts { display: flex; align-items: center; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+.newproj .nacts .job { margin: 0; }
+
 /* ---- Project folders ---- */
 .folders-intro { margin: 0 0 12px; color: var(--muted); max-width: 72ch; }
 .folder { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
@@ -480,7 +498,35 @@ body.down .view, body.down .notes { display: none; }
         </div>
       </div>
       <ol class="rack" id="rack" aria-label="The stack"></ol>
-      <div class="sect-head sticky"><h2>Sites<span class="count-pill" id="sitecount"></span></h2><input id="sitefind" class="sitefind" type="search" placeholder="Find a site  ( / )" aria-label="Find a site by name or folder. Enter opens the first match." aria-keyshortcuts="/" spellcheck="false" autocomplete="off" hidden></div>
+      <div class="sect-head sticky"><h2>Sites<span class="count-pill" id="sitecount"></span></h2><input id="sitefind" class="sitefind" type="search" placeholder="Find a site  ( / )" aria-label="Find a site by name or folder. Enter opens the first match." aria-keyshortcuts="/" spellcheck="false" autocomplete="off" hidden><button id="newbtn" class="newbtn" aria-expanded="false" aria-controls="newproj">New project</button></div>
+      <form class="panel newproj" id="newproj" hidden aria-labelledby="newproj-title" novalidate>
+        <h3 id="newproj-title">New project</h3>
+        <div class="nfields">
+          <label class="nf nname">Name
+            <input type="text" id="nname" required maxlength="50" spellcheck="false" autocomplete="off" placeholder="shop" aria-describedby="naddr">
+          </label>
+          <label class="nf">Starter
+            <select id="nstarter">
+              <option value="laravel">Laravel</option>
+              <option value="laravel-react">Laravel + React starter kit</option>
+              <option value="laravel-vue">Laravel + Vue starter kit</option>
+              <option value="laravel-livewire">Laravel + Livewire starter kit</option>
+              <option value="wordpress">WordPress</option>
+              <option value="php">Plain PHP</option>
+              <option value="vite">Vite (React + TypeScript)</option>
+            </select>
+          </label>
+          <label class="nf" id="ndbf">Database <select id="ndb"></select></label>
+          <label class="nf" id="nphpf">PHP <select id="nphp"></select></label>
+          <label class="nf" id="nfolderf">Folder <select id="nfolder"></select></label>
+        </div>
+        <p class="naddr" id="naddr" aria-live="polite"></p>
+        <div class="nacts">
+          <button type="submit" class="primary" id="ncreate">Create</button>
+          <button type="button" class="linkish" id="ncancel">Cancel</button>
+          <span class="job" id="newjob" role="status"></span>
+        </div>
+      </form>
       <div class="panel sites" id="sites"></div>
       <div class="panel empty-state" id="nosites" hidden>No sites yet. Make a folder in one of your <a href="#folders">project folders</a> (or run <code>laman link</code> in a project) and it appears here within a couple of seconds.</div>
     </section>

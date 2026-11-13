@@ -193,6 +193,7 @@ function draw(force) {
   }
 
   if (vers && changed("versions", [vers, avail, pending])) renderVersions();
+  drawNew();
   if (editors && changed("editors", [editors, status.editor])) renderEditors();
   if (apps && changed("apps", [apps, removing, status.httpsPort, status.httpsTrusted, status.httpPort])) renderApps();
   if (shareCfg && changed("sharing", [shareCfg, shareEditing])) renderSharing();
@@ -925,6 +926,118 @@ let naming = "";        // folder whose name prefix is being edited
 
 const normDir = (p) => (p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
 const slug = (v) => v.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+// New project: a form above the sites list that runs `laman new` as the
+// background job. It is static markup, so polling redraws leave it alone;
+// its choices are filled in when it opens and when the starter changes.
+const LARAVEL = /^laravel/;
+let newName = "";      // the project being created, until its job ends
+const serverReady = (kind) => {
+  const v = vers?.versions.find((x) => x.kind === kind);
+  return !!(v && v.installed?.length && v.enabled);
+};
+function newOptions() {
+  const starter = $("nstarter").value;
+  const fill = (sel, opts, keep) => {
+    const was = keep ? sel.value : "";
+    sel.replaceChildren(...opts.map(([value, text, off]) => el("option", { value, disabled: !!off }, text)));
+    const ok = opts.find(([v, , off]) => v === was && !off) || opts.find(([, , off]) => !off);
+    if (ok) sel.value = ok[0];
+  };
+  // Database: what the starter can use, from what is installed and on.
+  const dbs = [];
+  if (LARAVEL.test(starter) || starter === "wordpress") {
+    dbs.push(["mariadb", serverReady("mariadb") ? "MariaDB" : "MariaDB (not installed or off)", !serverReady("mariadb")]);
+    if (LARAVEL.test(starter)) {
+      dbs.push(["postgres", serverReady("postgres") ? "PostgreSQL" : "PostgreSQL (not installed or off)", !serverReady("postgres")]);
+      dbs.push(["sqlite", "SQLite (a file in the project)"]);
+    }
+  }
+  $("ndbf").hidden = dbs.length === 0;
+  fill($("ndb"), dbs, true);
+  // PHP: the default, or pin the project to another installed version.
+  const php = vers?.versions.find((v) => v.kind === "php");
+  const def = short(status.php || php?.active || "");
+  const lines = [...new Set((php?.installed || []).map((v) => short(v).split(".").slice(0, 2).join(".")))].reverse();
+  const old = (v) => LARAVEL.test(starter) && newer("8.3", v);
+  $("nphpf").hidden = starter === "vite" || lines.length < 2;
+  fill($("nphp"), [["", `${def.split(".").slice(0, 2).join(".")} (default)`],
+    ...lines.filter((l) => !def.startsWith(l + ".")).map((l) => [l, old(l) ? `${l} (Laravel needs 8.3+)` : l, old(l)])], true);
+  // Folder: only when there is more than one project folder.
+  const folders = status.folders || [{ dir: status.sitesDir }];
+  $("nfolderf").hidden = folders.length < 2;
+  fill($("nfolder"), folders.map((f, i) => [i === 0 ? "" : f.dir, tidy(f.dir)]), true);
+  newAddress();
+}
+function newAddress() {
+  const box = $("nname"), line = $("naddr");
+  const raw = box.value.trim();
+  const name = slug(raw);
+  const folders = status.folders || [{ dir: status.sitesDir }];
+  const folder = folders.find((f) => normDir(f.dir) === normDir($("nfolder").value)) || folders[0];
+  const host = `${folder.prefix ? folder.prefix + "-" : ""}${name}.${apps?.tld || "test"}`;
+  line.className = "naddr";
+  box.removeAttribute("aria-invalid");
+  if (!raw) { line.textContent = "Lowercase letters, digits and dashes; it becomes the folder and the address."; return; }
+  if (raw !== name) {
+    box.setAttribute("aria-invalid", "true");
+    line.className = "naddr err";
+    line.replaceChildren(name ? `Use lowercase letters, digits and dashes, e.g. ` : "Use lowercase letters, digits and dashes.", name ? el("span", { class: "mono" }, name) : "");
+    return;
+  }
+  const taken = status.sites.some((s) => s.host === host);
+  if (taken) {
+    box.setAttribute("aria-invalid", "true");
+    line.className = "naddr err";
+    line.replaceChildren(el("span", { class: "mono" }, host), " is already a site.");
+    return;
+  }
+  const slow = LARAVEL.test($("nstarter").value) || $("nstarter").value === "vite";
+  line.replaceChildren("Creates ", el("span", { class: "mono" }, `${tidy(folder.dir)}\\${name}`), " at ",
+    el("span", { class: "mono" }, siteURL(host).replace(/\/$/, "")), slow ? ". Composer and npm take a minute or two." : ".");
+}
+function openNew(on) {
+  $("newproj").hidden = !on;
+  $("newbtn").setAttribute("aria-expanded", String(on));
+  if (on) { newOptions(); $("nname").focus(); } else $("newbtn").focus();
+}
+$("newbtn").addEventListener("click", () => openNew($("newproj").hidden));
+$("ncancel").addEventListener("click", () => openNew(false));
+$("newproj").addEventListener("keydown", (e) => { if (e.key === "Escape" && !newName) openNew(false); });
+$("nstarter").addEventListener("change", newOptions);
+$("nfolder").addEventListener("change", newAddress);
+$("nname").addEventListener("input", newAddress);
+$("newproj").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const name = $("nname").value.trim();
+  if (!name || slug(name) !== name || $("nname").getAttribute("aria-invalid")) { newAddress(); $("nname").focus(); return; }
+  newName = name;
+  act(async () => {
+    try {
+      vers.job = await api("POST", "/api/new", { name, starter: $("nstarter").value,
+        db: $("ndbf").hidden ? "" : $("ndb").value, php: $("nphpf").hidden ? "" : $("nphp").value, folder: $("nfolder").value });
+    } catch (err) { newName = ""; throw err; }
+  });
+});
+// Each poll: show the job's progress; when it ends, say so and reset.
+function drawNew() {
+  if (!vers) return;
+  const job = vers.job;
+  const mine = newName && (job.running || job.error || job.message);
+  $("ncreate").disabled = job.running;
+  $("nname").readOnly = !!(newName && job.running);
+  if (!mine) { $("newjob").textContent = job.running ? "Another install is running…" : ""; return; }
+  if (job.running) { $("newjob").className = "job"; $("newjob").textContent = `Creating ${newName}…`; return; }
+  const name = newName;
+  newName = "";
+  if (job.error) { $("newjob").className = "job err"; $("newjob").textContent = job.error; return; }
+  $("newjob").textContent = "";
+  const site = status.sites.find((s) => s.path && /[\/]/.test(s.path) && s.path.split(/[\/]/).pop() === name && !s.app);
+  alertNote(site ? `Created ${name} at ${siteURL(site.host)}` : `Created ${name}`, "note info");
+  $("nname").value = "";
+  openNew(false);
+  if (site) { flashSite = site.name; render(true); setTimeout(() => { flashSite = ""; render(true); }, 6000); }
+}
 
 function renderFolders() {
   const folders = status.folders || (status.sitesDirs || [status.sitesDir]).map((dir) => ({ dir }));
