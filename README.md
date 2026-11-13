@@ -82,9 +82,11 @@ Coming from Laragon? laman can bring your projects and databases over:
 laman import laragon [--from dir] [--dry-run] [--yes] [--db a,b | --no-db]
 ```
 
-- **Quit Laragon first.** The import refuses to run while any Laragon server is up. `--dry-run` shows the plan without changing anything.
-- **Laragon is never changed:** its folders, vhosts, `laragon.ini`, hosts entries and databases are only read.
-- **Databases are copied** into laman's MariaDB (all of them, or pick with `--db a,b`, or skip with `--no-db`). One that already exists in laman is skipped, never overwritten.
+- **Quit Laragon first.** The import refuses to run while any Laragon server is up. `--dry-run` shows the plan without changing anything; otherwise it asks before importing, and `-y` (`--yes`) skips that question.
+- **Laragon's data is only read, never modified:** its folders, vhosts, `laragon.ini`, hosts entries and databases stay as they are.
+- **Databases are copied** into laman's MariaDB (all of them, or pick with `--db a,b`, or skip with `--no-db`). One that already exists in laman is skipped, never overwritten. Only Laragon's MySQL is supported, not its MariaDB.
+- **laman's MariaDB must be running** to copy databases. The import doesn't start it for you: it stops and points you to **Services** in the dashboard (or `laman enable mariadb`).
+- **Password:** if root has a password in Laragon's MySQL, the import asks for it; set `LAMAN_LARAGON_PASSWORD` instead to run without a prompt.
 - **Addresses follow laman's names:** `acme_app` becomes `acme-app.test`, with no alias for the old Laragon name.
 - **PHP fit:** each imported site is checked against the PHP version it asks for in `composer.json`, with a warning (and a one-click or `laman isolate` fix) when the default doesn't fit. Nothing is switched for you.
 
