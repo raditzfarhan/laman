@@ -1,6 +1,7 @@
 package laragon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -188,5 +189,24 @@ func TestPlanSameRootLinkedOnce(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("Links = %+v", p.Links)
+	}
+}
+
+func TestPlanJSONHasNoNull(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "laragon.exe"), "")
+	l, err := Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAMAN_HOME", t.TempDir())
+	cfg := config.Default()
+	cfg.SitesDir = t.TempDir()
+	b, err := json.Marshal(BuildPlan(l, cfg, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "null") {
+		t.Errorf("plan JSON has null: %s", b)
 	}
 }

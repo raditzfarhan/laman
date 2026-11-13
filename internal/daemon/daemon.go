@@ -698,7 +698,6 @@ func (d *daemon) status() Status {
 		Update: d.updates.get(),
 	}
 	st.Laragon.Found = d.laragonFound
-	st.Laragon.Notice = d.laragonFound
 	if cfg, err := config.Load(); err == nil {
 		if cfg.ShareTunnel != "" {
 			st.ShareDomain = cfg.ShareDomain

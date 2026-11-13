@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"laman/internal/config"
 	"laman/internal/install"
@@ -30,6 +32,7 @@ type importPlan struct {
 // Seams for tests.
 var (
 	lamanDatabases = lamanDBNames
+	runningServers = (*laragon.Laragon).RunningServers
 	runImportJob   = func(d *daemon, args, env []string) error {
 		return d.runJobEnv("Importing from Laragon", args, env, func() { d.refresh() })
 	}
@@ -42,7 +45,9 @@ func lamanDBNames(cfg *config.Config) ([]string, error) {
 	if cli == "" {
 		return nil, errors.New("the MariaDB client is missing")
 	}
-	cmd := exec.Command(cli, "-h", "127.0.0.1", "-P", fmt.Sprint(cfg.MySQLPort), "-u", "root", "-N", "-B", "-e", "SHOW DATABASES")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cli, "-h", "127.0.0.1", "-P", fmt.Sprint(cfg.MySQLPort), "-u", "root", "-N", "-B", "-e", "SHOW DATABASES")
 	noWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
@@ -58,9 +63,10 @@ func lamanDBNames(cfg *config.Config) ([]string, error) {
 }
 
 // safeFrom accepts an absolute path that cannot be mistaken for a flag.
+// UNC and device paths (\server, \?\) are refused.
 // (safeArg only allows version numbers, so it cannot be used for paths.)
 func safeFrom(s string) bool {
-	return s != "" && !strings.HasPrefix(s, "-") && filepath.IsAbs(s) && !strings.ContainsAny(s, "\x00\r\n")
+	return s != "" && !strings.HasPrefix(s, "-") && !strings.HasPrefix(s, `\`) && filepath.IsAbs(s) && !strings.ContainsAny(s, "\x00\r\n")
 }
 
 // importArgs builds the `laman import laragon` arguments. Every name in dbs
@@ -107,7 +113,7 @@ func buildImportPlan(from string) (importPlan, string, error) {
 	if derr != nil {
 		names = nil
 	}
-	plan := laragon.BuildPlan(l, cfg, names, l.RunningServers())
+	plan := laragon.BuildPlan(l, cfg, names, runningServers(l))
 	return importPlan{Plan: plan, MariaDBOff: derr != nil}, l.Root, nil
 }
 
@@ -169,6 +175,7 @@ func (d *daemon) importRoutes(mux *http.ServeMux) {
 		}
 		// The password travels in the environment only: never in the
 		// arguments, which the job log prints.
+		os.Remove(filepath.Join(config.LogDir(), "import-laragon.json")) // /log must not show the previous run's result
 		var env []string
 		if req.Password != "" {
 			env = []string{"LAMAN_LARAGON_PASSWORD=" + req.Password}
@@ -203,6 +210,6 @@ func (d *daemon) importRoutes(mux *http.ServeMux) {
 			fail(w, http.StatusInternalServerError, "%v", err)
 			return
 		}
-		writeJSON(w, struct{ OK bool }{true})
+		writeJSON(w, map[string]bool{"ok": true})
 	})
 }

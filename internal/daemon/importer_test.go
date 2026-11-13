@@ -36,8 +36,8 @@ func newImportFixture(t *testing.T, lamanDBs []string, dbErr error) *importFixtu
 		os.MkdirAll(filepath.Join(f.root, "data", "mysql-8.4", db), 0o755)
 	}
 
-	oldDBs, oldRun := lamanDatabases, runImportJob
-	t.Cleanup(func() { lamanDatabases, runImportJob = oldDBs, oldRun })
+	oldDBs, oldRun, oldSrv := lamanDatabases, runImportJob, runningServers
+	t.Cleanup(func() { lamanDatabases, runImportJob, runningServers = oldDBs, oldRun, oldSrv })
 	lamanDatabases = func(*config.Config) ([]string, error) { return lamanDBs, dbErr }
 	runImportJob = func(d *daemon, args, env []string) error {
 		f.args, f.env = args, env
@@ -79,7 +79,7 @@ func TestImportArgs(t *testing.T) {
 			t.Errorf("importArgs(%q) accepted: %q", bad, args)
 		}
 	}
-	for _, from := range []string{"-x", "--yes", "", `rel\dir`, "C:\\a\nb"} {
+	for _, from := range []string{"-x", "--yes", "", `\server\share`, `\?\C:\x`, `rel\dir`, "C:\\a\nb"} {
 		if _, err := importArgs(from, nil, plan); err == nil {
 			t.Errorf("importArgs from %q accepted", from)
 		}
@@ -194,5 +194,45 @@ func TestDismissSetsNotice(t *testing.T) {
 	cfg, err := config.Load()
 	if err != nil || cfg.LaragonNotice != "dismissed" {
 		t.Errorf("notice = %q, %v", cfg.LaragonNotice, err)
+	}
+}
+
+func TestImportBlockedIs409(t *testing.T) {
+	f := newImportFixture(t, nil, nil)
+	runningServers = func(*laragon.Laragon) []string { return []string{"httpd.exe"} }
+	rec := f.do("POST", "/api/import/laragon", `{"from":`+quote(f.root)+`,"dbs":[]}`)
+	if rec.Code != 409 || f.ran != 0 || !strings.Contains(rec.Body.String(), "httpd.exe") {
+		t.Errorf("blocked: %d %s ran=%d", rec.Code, rec.Body, f.ran)
+	}
+}
+
+func TestImportClearsOldResult(t *testing.T) {
+	f := newImportFixture(t, nil, nil)
+	os.MkdirAll(config.LogDir(), 0o755)
+	res := filepath.Join(config.LogDir(), "import-laragon.json")
+	os.WriteFile(res, []byte(`{}`), 0o644)
+	f.do("POST", "/api/import/laragon", `{"from":`+quote(f.root)+`,"dbs":[]}`)
+	if _, err := os.Stat(res); err == nil || f.ran != 1 {
+		t.Errorf("old result kept (err %v) ran=%d", err, f.ran)
+	}
+}
+
+func TestStatusLaragon(t *testing.T) {
+	t.Setenv("LAMAN_HOME", t.TempDir())
+	d := &daemon{cfg: config.Default(), laragonFound: true}
+	if st := d.status().Laragon; !st.Found || !st.Notice {
+		t.Errorf("found: %+v", st)
+	}
+	cfg := config.Default()
+	cfg.LaragonNotice = "dismissed"
+	cfg.Save()
+	if st := d.status().Laragon; !st.Found || st.Notice {
+		t.Errorf("dismissed: %+v", st)
+	}
+	d.laragonFound = false
+	cfg.LaragonNotice = ""
+	cfg.Save()
+	if st := d.status().Laragon; st.Found || st.Notice {
+		t.Errorf("not found: %+v", st)
 	}
 }

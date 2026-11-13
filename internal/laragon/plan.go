@@ -181,6 +181,31 @@ func BuildPlan(l *Laragon, cfg *config.Config, lamanDBs []string, running []stri
 	for _, d := range dbs {
 		p.DBs = append(p.DBs, PlanDB{Name: d.Name, Size: d.Size, Exists: have[strings.ToLower(d.Name)], Copy: LooksLikeCopy(d.Name)})
 	}
+	// Empty lists are [] in JSON, never null: the dashboard maps over them.
+	if p.Blocked == nil {
+		p.Blocked = []string{}
+	}
+	if p.Folders == nil {
+		p.Folders = []PlanFolder{}
+	}
+	if p.Links == nil {
+		p.Links = []PlanLink{}
+	}
+	if p.Renamed == nil {
+		p.Renamed = []Rename{}
+	}
+	if p.ByHand == nil {
+		p.ByHand = []VHost{}
+	}
+	if p.Clashes == nil {
+		p.Clashes = []string{}
+	}
+	if p.DBs == nil {
+		p.DBs = []PlanDB{}
+	}
+	if p.PHP == nil {
+		p.PHP = []SiteFit{}
+	}
 	return p
 }
 
