@@ -340,7 +340,7 @@ function phpFitAction(siteName, fit) {
     ? el("button", { class: "inline", title: tip, onclick: () => setSitePHP(siteName, fit.use) }, `Use PHP ${short(fit.use)}`)
     : fit.install
       ? el("button", { class: "inline", title: tip, onclick: () => act(() => api("POST", "/api/versions/install", { kind: "php", line: fit.install })) }, `Install PHP ${fit.install}`)
-      : el("span", { class: "fitnone", title: tip }, `No PHP laman offers fits ${fit.needs}`);
+      : el("span", { class: "fitnone", title: tip }, `No installed PHP fits ${fit.needs} `, el("a", { href: "#versions" }, "Versions"));
   return el("span", { class: "phpfit" }, el("span", { class: "fitmark", title: tip, "aria-label": tip }, "!"), action);
 }
 

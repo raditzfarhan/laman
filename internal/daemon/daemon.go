@@ -182,6 +182,7 @@ func Run() error {
 	go d.watch(ctx)
 	go d.startAutoDev()
 	go d.watchUpdates(ctx)
+	go d.primePHPLines()
 	logf("laman started (pid %d): Caddy %s, mariadb %q", os.Getpid(), caddyVersion(), d.mariadb)
 
 	<-d.quit
@@ -775,6 +776,21 @@ func guard(next http.Handler, port int) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// primePHPLines fetches the installable PHP lines in the background (best
+// effort) and refreshes once they are known, so PHPFit.Install can be filled.
+func (d *daemon) primePHPLines() {
+	if d.phpLines.cached() != nil {
+		return
+	}
+	if _, err := d.phpLines.get(); err != nil {
+		logf("fetching PHP lines: %v", err)
+		return
+	}
+	if err := d.refresh(); err != nil {
+		logf("refresh after fetching PHP lines: %v", err)
+	}
 }
 
 // fillPHPFit sets s.PHPFit for a PHP site (not a laman app) whose

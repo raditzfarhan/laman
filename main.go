@@ -798,6 +798,8 @@ func phpFitHint(f *sites.PHPFit) string {
 		h += " (laman isolate " + shortPHP(f.Use) + ")"
 	case f.Install != "":
 		h += " (laman install php " + f.Install + ")"
+	default:
+		h += " (no installed PHP fits; see laman install php)"
 	}
 	return h
 }

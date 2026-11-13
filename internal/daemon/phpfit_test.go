@@ -27,6 +27,11 @@ func TestSitesCarryPHPFit(t *testing.T) {
 	if old.PHPFit == nil || old.PHPFit.Use != "8.4.15" {
 		t.Fatalf("mismatch: want Use 8.4.15, got %+v", old.PHPFit)
 	}
+	legacy := site("acme-legacy", `{"require":{"php":"~7.4.0"}}`, sites.KindPHP, "")
+	fillPHPFit(cfg, &legacy, []string{"7.4", "8.4"})
+	if legacy.PHPFit == nil || legacy.PHPFit.Use != "" || legacy.PHPFit.Install != "7.4" {
+		t.Errorf("legacy with lines: want Install 7.4, got %+v", legacy.PHPFit)
+	}
 	fine := site("acme-new", `{"require":{"php":"^8.2"}}`, sites.KindPHP, "")
 	fillPHPFit(cfg, &fine, nil)
 	if fine.PHPFit != nil {
