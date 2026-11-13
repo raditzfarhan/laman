@@ -134,7 +134,6 @@ function draw(force) {
   }
 
   const laragon = status.laragon || {};
-  $("laragonlink").hidden = !laragon.found;
   const notesData = [onHome, status.hostsStale, status.notes, status.httpsNote, status.httpsPort, status.httpsTrusted, hostsJob && job, up.available, up.running, laragon.notice];
   if (changed("notes", notesData)) {
     const notes = [];
@@ -343,11 +342,7 @@ function rowEnds(s, open = true, share = null) {
 // runs on: a mark with the reason, and the one action that fixes it (use an
 // installed PHP, install one, or a note that none fits). Reused by the
 // Laragon import.
-// The daemon sends Go's field names (Needs, From, RunsOn, Use, Install).
-const fitOf = (f) => ({ needs: f.needs ?? f.Needs ?? "", from: f.from ?? f.From ?? "", runsOn: f.runsOn ?? f.RunsOn ?? "",
-  use: f.use ?? f.Use ?? "", install: f.install ?? f.Install ?? "" });
-function phpFitAction(siteName, raw) {
-  const fit = fitOf(raw);
+function phpFitAction(siteName, fit) {
   const tip = `${fit.from} asks for PHP ${fit.needs}; it runs on ${short(fit.runsOn)}`;
   const action = fit.use
     ? el("button", { class: "inline", title: tip, onclick: () => setSitePHP(siteName, fit.use) }, `Use PHP ${short(fit.use)}`)
@@ -1220,9 +1215,9 @@ async function loadImportPlan() {
   imp.error = error;
   if (plan) {
     // Tick what is new and not a copy, once; later polls keep the user's choice.
-    const fresh = !prev || prev.Root !== plan.Root || prev.mariadbOff !== plan.mariadbOff;
-    const can = new Set(plan.mariadbOff ? [] : plan.DBs.filter((d) => !d.Exists).map((d) => d.Name));
-    imp.picked = fresh ? new Set(plan.DBs.filter((d) => can.has(d.Name) && !d.Copy).map((d) => d.Name))
+    const fresh = !prev || prev.root !== plan.root || prev.mariadbOff !== plan.mariadbOff;
+    const can = new Set(plan.mariadbOff ? [] : plan.dbs.filter((d) => !d.exists).map((d) => d.name));
+    imp.picked = fresh ? new Set(plan.dbs.filter((d) => can.has(d.name) && !d.copy).map((d) => d.name))
       : new Set([...imp.picked].filter((n) => can.has(n)));
   }
   render();
@@ -1242,7 +1237,7 @@ async function loadImportLog() {
     imp.result = log.result;
     imp.jobError = job.error || "";
     imp.retryDBs = !importNeedsPassword() ? []
-      : log.result ? Object.keys(log.result.Failed || {}).filter((k) => k.startsWith("db:")).map((k) => k.slice(3)) : imp.sentDBs;
+      : log.result ? Object.keys(log.result.failed || {}).filter((k) => k.startsWith("db:")).map((k) => k.slice(3)) : imp.sentDBs;
     focusDone = true;
     drawn = {};
     refresh(); // the new sites, and the Home note goes
@@ -1312,7 +1307,7 @@ $("impgo").addEventListener("click", () => runImport([...imp.picked]));
 setInterval(() => {
   if (currentView() !== "import" || document.body.classList.contains("down")) return;
   if (imp.phase === "running") loadImportLog();
-  else if (imp.phase === "plan" && imp.plan?.Blocked.length && Date.now() - imp.loadedAt >= 2900) loadImportPlan();
+  else if (imp.phase === "plan" && imp.plan?.blocked.length && Date.now() - imp.loadedAt >= 2900) loadImportPlan();
 }, 1000);
 
 function drawImport() {
@@ -1329,9 +1324,9 @@ function drawImport() {
     pre.textContent = text;
     if (atEnd) pre.scrollTop = pre.scrollHeight;
   }
-  const phpNow = imp.phase === "done" ? (imp.result?.PHP || []).map((e) => {
-    const s = status.sites.find((x) => x.name === e.Site);
-    return [e.Site, s?.php, s?.phpFit];
+  const phpNow = imp.phase === "done" ? (imp.result?.php || []).map((e) => {
+    const s = status.sites.find((x) => x.name === e.site);
+    return [e.site, s?.php, s?.phpFit];
   }) : null;
   if (document.activeElement === pwInput) return; // a redraw would take the focus away
   if (!changed("import", [imp.plan, imp.error, imp.loading && !imp.plan, imp.from, [...imp.picked], imp.phase, imp.result, imp.jobError,
@@ -1359,7 +1354,7 @@ function renderImport(job) {
   const tld = tldOf();
 
   $("impfrom").hidden = phase !== "plan";
-  $("impwhere").replaceChildren(...(p ? ["Laragon at ", el("span", { class: "mono" }, p.Root)] : []));
+  $("impwhere").replaceChildren(...(p ? ["Laragon at ", el("span", { class: "mono" }, p.root)] : []));
   $("impfromdef").hidden = !imp.from;
   if (imp.error && $("impfromform").hidden) {
     $("impfromform").hidden = false;
@@ -1369,17 +1364,17 @@ function renderImport(job) {
   // Laragon running (or not found) comes first.
   const notes = [];
   if (phase === "plan" && imp.error) notes.push(el("div", { class: "note err" }, el("span", {}, imp.error)));
-  if (phase === "plan" && p?.Blocked.length) {
+  if (phase === "plan" && p?.blocked.length) {
     notes.push(el("div", { class: "note" }, el("span", {},
-      `Quit Laragon (or click Stop All) first — still running: ${p.Blocked.join(", ")}. If Laragon starts its servers by itself, turn off its Start All automatically setting.`)));
+      `Quit Laragon (or click Stop All) first — still running: ${p.blocked.join(", ")}. If Laragon starts its servers by itself, turn off its Start All automatically setting.`)));
   }
   $("impblock").replaceChildren(...notes);
 
   $("impdone").replaceChildren(...(phase === "done" ? [importSummary(tld)] : []));
-  $("impplan").replaceChildren(...(phase === "plan" ? importPlan(p, tld) : phase === "done" ? [importPHP(imp.result?.PHP || [], true)].filter(Boolean) : []));
+  $("impplan").replaceChildren(...(phase === "plan" ? importPlan(p, tld) : phase === "done" ? [importPHP(imp.result?.php || [], true)].filter(Boolean) : []));
 
   // The run panel: Import and what it does; then the progress.
-  const blocked = !!p?.Blocked.length;
+  const blocked = !!p?.blocked.length;
   const otherJob = job.running && phase === "plan";
   $("imprun").hidden = phase === "plan" && !p;
   $("impacts").hidden = phase !== "plan";
@@ -1394,13 +1389,13 @@ function renderImport(job) {
 
 // "Adds 1 project folder, links 1 site and copies 3 databases (120 MB)."
 function importWhat(p) {
-  const folders = p.Folders.filter((f) => !f.Already).length;
-  const links = p.Links.filter((l) => !l.Taken).length;
-  const dbs = p.DBs.filter((d) => imp.picked.has(d.Name));
+  const folders = p.folders.filter((f) => !f.already).length;
+  const links = p.links.filter((l) => !l.taken).length;
+  const dbs = p.dbs.filter((d) => imp.picked.has(d.name));
   const parts = [];
   if (folders) parts.push(`adds ${plural(folders, "project folder")}`);
   if (links) parts.push(`links ${plural(links, "site")}`);
-  if (dbs.length) parts.push(`copies ${plural(dbs.length, "database")} (${fmtSize(dbs.reduce((n, d) => n + d.Size, 0))})`);
+  if (dbs.length) parts.push(`copies ${plural(dbs.length, "database")} (${fmtSize(dbs.reduce((n, d) => n + d.size, 0))})`);
   const s = joinAnd(parts);
   return s ? s[0].toUpperCase() + s.slice(1) + "." : "Nothing new to import.";
 }
@@ -1410,27 +1405,27 @@ function importPlan(p, tld) {
   const off = p.mariadbOff;
 
   const projects = [
-    impGroup("Project folders", null, p.Folders.map((f) => impRow(tidy(f.Dir),
-      f.Already ? impTag("already in laman") : "each folder inside becomes a site", null, f.Already ? "off" : ""))),
-    impGroup("Sites outside www", null, p.Links.map((l) => impRow(`${l.Name}.${tld}`,
-      l.Taken ? impTag("name taken, skipped", `laman already has a site called ${l.Name}. Link this folder by hand under another name.`) : "gets linked",
-      tidy(l.Dir), l.Taken ? "off" : ""))),
-    impGroup("Addresses that change", null, p.Renamed.map((r) => impRow([r.From, el("span", { class: "arrow", "aria-label": "becomes" }, "→"), r.To])), APP_URL_LINE),
+    impGroup("Project folders", null, p.folders.map((f) => impRow(tidy(f.dir),
+      f.already ? impTag("already in laman") : "each folder inside becomes a site", null, f.already ? "off" : ""))),
+    impGroup("Sites outside www", null, p.links.map((l) => impRow(`${l.name}.${tld}`,
+      l.taken ? impTag("name taken, skipped", `laman already has a site called ${l.name}. Link this folder by hand under another name.`) : "gets linked",
+      tidy(l.dir), l.taken ? "off" : ""))),
+    impGroup("Addresses that change", null, p.renamed.map((r) => impRow([r.from, el("span", { class: "arrow", "aria-label": "becomes" }, "→"), r.to])), APP_URL_LINE),
     impGroup("Check by hand", `laman can't copy these Laragon settings (rewrites, proxies, or a name outside .${tld}). Set them up again after the import.`,
-      p.ByHand.map((v) => impRow(v.Host, null, tidy(v.File)))),
-    impGroup("Not served", null, p.Clashes.map((c) => impRow(c, null, null, "warn"))),
+      p.byHand.map((v) => impRow(v.host, null, tidy(v.file)))),
+    impGroup("Not served", null, p.clashes.map((c) => impRow(c, null, null, "warn"))),
   ];
-  const selectable = off ? [] : p.DBs.filter((d) => !d.Exists);
-  const dbRows = p.DBs.map((d) => {
-    const can = !off && !d.Exists;
-    const box = el("input", { type: "checkbox", checked: can && imp.picked.has(d.Name), disabled: !can,
-      onchange: (e) => { e.target.checked ? imp.picked.add(d.Name) : imp.picked.delete(d.Name); render(); } });
-    return el("div", { class: "impdb" + (d.Exists ? " off" : "") },
-      el("label", {}, box, el("span", { class: "name" }, d.Name),
-        d.Exists ? impTag("already in laman") : d.Copy ? impTag("looks like a copy") : null),
-      el("span", { class: "size" }, fmtSize(d.Size)));
+  const selectable = off ? [] : p.dbs.filter((d) => !d.exists);
+  const dbRows = p.dbs.map((d) => {
+    const can = !off && !d.exists;
+    const box = el("input", { type: "checkbox", checked: can && imp.picked.has(d.name), disabled: !can,
+      onchange: (e) => { e.target.checked ? imp.picked.add(d.name) : imp.picked.delete(d.name); render(); } });
+    return el("div", { class: "impdb" + (d.exists ? " off" : "") },
+      el("label", {}, box, el("span", { class: "name" }, d.name),
+        d.exists ? impTag("already in laman") : d.copy ? impTag("looks like a copy") : null),
+      el("span", { class: "size" }, fmtSize(d.size)));
   });
-  const setAll = (on) => { imp.picked = new Set(on ? selectable.map((d) => d.Name) : []); render(); };
+  const setAll = (on) => { imp.picked = new Set(on ? selectable.map((d) => d.name) : []); render(); };
 
   return [
     el("section", { class: "impsect", "aria-labelledby": "imp-projects" },
@@ -1438,7 +1433,7 @@ function importPlan(p, tld) {
       el("div", { class: "panel" }, projects.filter(Boolean))),
     el("section", { class: "impsect", "aria-labelledby": "imp-dbs" },
       el("div", { class: "sect-head" },
-        el("h2", { id: "imp-dbs" }, "Databases", p.DBs.length ? el("span", { class: "count-pill" }, String(p.DBs.length)) : null),
+        el("h2", { id: "imp-dbs" }, "Databases", p.dbs.length ? el("span", { class: "count-pill" }, String(p.dbs.length)) : null),
         el("span", { class: "hint" }, "Laragon's databases are read, not changed."),
         selectable.length > 1 ? el("span", { class: "impsel" },
           el("button", { class: "linkish", onclick: () => setAll(true) }, "Select all"),
@@ -1446,7 +1441,7 @@ function importPlan(p, tld) {
       off ? el("div", { class: "note" }, el("span", {}, "laman's MariaDB isn't running, so databases can't be copied now. ",
         el("a", { href: "#services" }, "Start it in Services"), ", then come back.")) : null,
       el("div", { class: "panel" }, dbRows.length ? dbRows : el("div", { class: "empty-state" }, "Laragon has no databases of its own."))),
-    importPHP(p.PHP, false),
+    importPHP(p.php, false),
   ].filter(Boolean);
 }
 
@@ -1455,16 +1450,16 @@ function importPlan(p, tld) {
 function importPHP(list, live) {
   if (!list.length) return null;
   const rows = list.map((e) => {
-    const name = el("b", {}, e.Site);
+    const name = el("b", {}, e.site);
     if (!live) {
-      const fit = fitOf(e.Fit);
+      const fit = e.fit;
       return impRow([name, ` needs PHP ${fit.needs}, would run on ${phpLine(fit.runsOn)}`],
         fit.use ? `PHP ${short(fit.use)} fits` : "no installed PHP fits", fit.from);
     }
-    const s = status.sites.find((x) => x.name === e.Site);
+    const s = status.sites.find((x) => x.name === e.site);
     if (s && !s.phpFit) return impRow([name, ` runs on PHP ${phpLine(s.php)}`], el("span", { class: "ok" }, "fits"));
-    const fit = fitOf(s?.phpFit || e.Fit);
-    return impRow([name, ` needs PHP ${fit.needs}, runs on ${phpLine(fit.runsOn)}`], phpFitAction(e.Site, s?.phpFit || e.Fit), fit.from);
+    const fit = s?.phpFit || e.fit;
+    return impRow([name, ` needs PHP ${fit.needs}, runs on ${phpLine(fit.runsOn)}`], phpFitAction(e.site, s?.phpFit || e.fit), fit.from);
   });
   return el("section", { class: "impsect impphp", "aria-labelledby": "imp-php" },
     el("div", { class: "sect-head" }, el("h2", { id: "imp-php" }, "PHP"),
@@ -1476,7 +1471,7 @@ function importPHP(list, live) {
 const FAILED_KIND = { db: "Database", folder: "Folder", link: "Link", config: "Saving" };
 function importSummary(tld) {
   const r = imp.result;
-  const failed = Object.entries(r?.Failed || {});
+  const failed = Object.entries(r?.failed || {});
   const pw = importNeedsPassword();
   const item = (dot, text, side, reason) => el("div", { class: "improw" },
     el("span", { class: "main" }, el("span", { class: "dot " + dot, "aria-hidden": "true" }), text),
@@ -1505,13 +1500,13 @@ function importSummary(tld) {
   if (pw) why = `Laragon's MySQL asked for a password, so ${joinAnd(imp.retryDBs) || "the databases"} ${imp.retryDBs.length === 1 ? "wasn't" : "weren't"} copied.`;
 
   const projects = r ? [
-    ...r.Folders.map((f) => item("ok", tidy(f), "added")),
-    ...r.Links.map((n) => item("ok", `${n}.${tld}`, "linked")),
+    ...r.folders.map((f) => item("ok", tidy(f), "added")),
+    ...r.links.map((n) => item("ok", `${n}.${tld}`, "linked")),
     ...failed.filter(([k]) => !k.startsWith("db:")).map(fail),
   ] : [];
   const dbs = r ? [
-    ...r.Copied.map((n) => item("ok", n, "copied")),
-    ...r.Skipped.map((n) => item("", n, "already in laman, skipped")),
+    ...r.copied.map((n) => item("ok", n, "copied")),
+    ...r.skipped.map((n) => item("", n, "already in laman, skipped")),
     ...failed.filter(([k]) => k.startsWith("db:") && !pw).map(fail),
   ] : [];
   pwHint.textContent = imp.triedPassword ? "That password didn't work. Laragon's MySQL password:" : "Laragon's MySQL password";
@@ -1521,11 +1516,11 @@ function importSummary(tld) {
     why ? el("p", { class: "why" }, why) : null,
     impGroup("Projects", null, projects),
     impGroup("Databases", null, dbs),
-    r ? impGroup("Addresses that changed", null, r.Renamed.map((x) => impRow([x.From, el("span", { class: "arrow", "aria-label": "becomes" }, "→"), x.To])), APP_URL_LINE) : null,
-    r ? impGroup("Check by hand", null, r.ByHand.map((v) => impRow(v))) : null,
+    r ? impGroup("Addresses that changed", null, r.renamed.map((x) => impRow([x.from, el("span", { class: "arrow", "aria-label": "becomes" }, "→"), x.to])), APP_URL_LINE) : null,
+    r ? impGroup("Check by hand", null, r.byHand.map((v) => impRow(v))) : null,
     pw && imp.retryDBs.length ? pwForm : null,
     el("div", { class: "acts" },
-      r && (r.Folders.length || r.Links.length || r.Copied.length) ? el("a", { class: "btn primary", href: "#home" }, "See your sites") : null,
+      r && (r.folders.length || r.links.length || r.copied.length) ? el("a", { class: "btn primary", href: "#home" }, "See your sites") : null,
       el("button", { class: r ? "linkish" : "", onclick: () => {
         Object.assign(imp, { phase: "plan", plan: null, result: null, jobError: "", lines: [], retryDBs: [], triedPassword: false });
         render(true);

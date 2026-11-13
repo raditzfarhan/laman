@@ -144,6 +144,11 @@ func TestImportPlanEndpoint(t *testing.T) {
 	if got.Root != f.root || got.MariaDBOff {
 		t.Errorf("plan = %+v", got)
 	}
+	for _, k := range []string{`"root":`, `"blocked":`, `"folders":[{"dir":`, `"dbs":[{"name":"acme"`, `"mariadbOff":false`} {
+		if !strings.Contains(rec.Body.String(), k) {
+			t.Errorf("plan JSON lacks %s: %s", k, rec.Body)
+		}
+	}
 
 	f = newImportFixture(t, nil, os.ErrDeadlineExceeded)
 	rec = f.do("GET", "/api/import/laragon?from="+f.root, "")
@@ -177,14 +182,14 @@ func TestImportLogEndpoint(t *testing.T) {
 	}
 	log.WriteString("last\n")
 	os.WriteFile(filepath.Join(config.LogDir(), "import-laragon.log"), []byte(log.String()), 0o644)
-	os.WriteFile(filepath.Join(config.LogDir(), "import-laragon.json"), []byte(`{"Copied":["acme"],"needsPassword":false}`), 0o644)
+	os.WriteFile(filepath.Join(config.LogDir(), "import-laragon.json"), []byte(`{"copied":["acme"],"needsPassword":false}`), 0o644)
 	got.Lines, got.Result = nil, nil
 	rec = f.do("GET", "/api/import/laragon/log", "")
 	json.Unmarshal(rec.Body.Bytes(), &got)
 	if len(got.Lines) != 50 || got.Lines[49] != "last" || strings.Contains(got.Lines[0], "\r") {
 		t.Errorf("lines = %d, last %q", len(got.Lines), got.Lines[len(got.Lines)-1])
 	}
-	if !strings.Contains(string(got.Result), `"Copied"`) {
+	if !strings.Contains(string(got.Result), `"copied"`) {
 		t.Errorf("result = %s", got.Result)
 	}
 }

@@ -38,13 +38,15 @@ type importOpts struct {
 // NeedsPassword: Laragon's MySQL refused the password (none could be
 // asked for), so no database was copied.
 type importResult struct {
-	Folders, Links  []string
-	Copied, Skipped []string
-	Failed          map[string]string
-	Renamed         []laragon.Rename
-	ByHand          []string
-	PHP             []laragon.SiteFit
-	NeedsPassword   bool `json:"needsPassword"`
+	Folders       []string          `json:"folders"`
+	Links         []string          `json:"links"`
+	Copied        []string          `json:"copied"`
+	Skipped       []string          `json:"skipped"`
+	Failed        map[string]string `json:"failed"`
+	Renamed       []laragon.Rename  `json:"renamed"`
+	ByHand        []string          `json:"byHand"`
+	PHP           []laragon.SiteFit `json:"php"`
+	NeedsPassword bool              `json:"needsPassword"`
 }
 
 // Keys of importResult.Failed.

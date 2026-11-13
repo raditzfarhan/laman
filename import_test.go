@@ -360,7 +360,16 @@ func TestImportResultJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{`"needsPassword":true`, `"Folders"`, `"Failed"`, `"Copied"`} {
+	for _, k := range []string{`"needsPassword":true`, `"folders"`, `"links"`, `"copied"`, `"skipped"`,
+		`"failed"`, `"renamed"`, `"byHand"`, `"php"`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("JSON lacks %s: %s", k, b)
+		}
+	}
+	// Nested: renamed and php entries are lower camelCase too.
+	b, _ = json.Marshal(importResult{Renamed: []laragon.Rename{{From: "a.test", To: "b.test"}},
+		PHP: []laragon.SiteFit{{Site: "acme", Fit: config.PHPFit{Needs: "^7.4", RunsOn: "8.5.1"}}}})
+	for _, k := range []string{`{"from":"a.test","to":"b.test"}`, `"site":"acme"`, `"fit":{"needs":"^7.4","from":"","runsOn":"8.5.1","use":"","install":""}`} {
 		if !strings.Contains(string(b), k) {
 			t.Errorf("JSON lacks %s: %s", k, b)
 		}

@@ -34,12 +34,15 @@ type Laragon struct {
 type VHost struct {
 	// File is the conf file's path, Host its ServerName as written
 	// (e.g. acme.test), Root its document root with a trailing \public removed.
-	File, Host, Root string
+	File string `json:"file"`
+	Host string `json:"host"`
+	Root string `json:"root"`
 	// Auto: made by Laragon's auto virtual hosts. Custom: any other conf.
-	Auto, Custom bool
+	Auto   bool `json:"auto"`
+	Custom bool `json:"custom"`
 	// Extra: the conf has directives beyond the basics (rewrites, proxies...)
 	// that an import can't carry over.
-	Extra bool
+	Extra bool `json:"extra"`
 }
 
 // Find reads the Laragon install at root.
@@ -85,7 +88,7 @@ var serverExes = map[string]bool{
 }
 
 // RunningServers names the Laragon servers (httpd.exe, mysqld.exe...)
-// currently running from under <Root>in, lower-cased and sorted.
+// currently running from under <Root>\bin, lower-cased and sorted.
 func (l *Laragon) RunningServers() []string {
 	return serversIn(desktop.ProcessesUnder(filepath.Join(l.Root, "bin")))
 }

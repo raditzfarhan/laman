@@ -12,7 +12,11 @@ import (
 // the file it came from, RunsOn the site's PHP, Use the newest installed
 // PHP that fits, Install the newest installable line that fits.
 type PHPFit struct {
-	Needs, From, RunsOn, Use, Install string
+	Needs   string `json:"needs"`
+	From    string `json:"from"`
+	RunsOn  string `json:"runsOn"`
+	Use     string `json:"use"`
+	Install string `json:"install"`
 }
 
 type Site struct {

@@ -209,4 +209,30 @@ func TestPlanJSONHasNoNull(t *testing.T) {
 	if strings.Contains(string(b), "null") {
 		t.Errorf("plan JSON has null: %s", b)
 	}
+	for _, k := range []string{`"root":`, `"blocked":`, `"folders":`, `"links":`, `"renamed":`, `"byHand":`, `"clashes":`, `"dbs":`, `"php":`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("plan JSON lacks %s: %s", k, b)
+		}
+	}
+}
+
+func TestPlanJSONNestedKeys(t *testing.T) {
+	b, err := json.Marshal(Plan{
+		Folders: []PlanFolder{{Dir: "/www"}},
+		Links:   []PlanLink{{Name: "acme", Dir: "/acme"}},
+		Renamed: []Rename{{From: "acme.dev", To: "acme.test"}},
+		ByHand:  []VHost{{File: "a.conf", Host: "acme.dev", Root: "/acme", Custom: true}},
+		DBs:     []PlanDB{{Name: "shop", Size: 1}},
+		PHP:     []SiteFit{{Site: "acme", Fit: config.PHPFit{Needs: "^7.4"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`{"dir":"/www","already":false}`, `{"name":"acme","dir":"/acme","taken":false}`,
+		`{"from":"acme.dev","to":"acme.test"}`, `{"file":"a.conf","host":"acme.dev","root":"/acme","auto":false,"custom":true,"extra":false}`,
+		`{"name":"shop","size":1,"exists":false,"copy":false}`, `{"site":"acme","fit":{"needs":"^7.4"`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("plan JSON lacks %s: %s", k, b)
+		}
+	}
 }

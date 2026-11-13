@@ -12,53 +12,58 @@ import (
 // Plan is everything an import would do, worked out without changing
 // anything. The CLI and the dashboard show it and then apply it.
 type Plan struct {
-	Root string
+	Root string `json:"root"`
 	// Blocked lists running Laragon servers ("httpd.exe"); while it is
 	// non-empty the import cannot be applied.
-	Blocked []string
-	Folders []PlanFolder
+	Blocked []string     `json:"blocked"`
+	Folders []PlanFolder `json:"folders"`
 	// Links are custom vhost roots outside WWW, served with laman link.
-	Links []PlanLink
+	Links []PlanLink `json:"links"`
 	// Renamed lists Laragon hosts whose laman address differs.
-	Renamed []Rename
+	Renamed []Rename `json:"renamed"`
 	// ByHand are custom vhosts laman cannot reproduce (extra directives,
 	// names outside laman's TLD).
-	ByHand []VHost
+	ByHand []VHost `json:"byHand"`
 	// Clashes has one sentence per site laman will not serve.
-	Clashes []string
-	DBs     []PlanDB
+	Clashes []string `json:"clashes"`
+	DBs     []PlanDB `json:"dbs"`
 	// PHP lists imported sites whose composer.json rules out the PHP they
 	// would run on.
-	PHP []SiteFit
+	PHP []SiteFit `json:"php"`
 }
 
 // PlanFolder is a project folder to add; Already when laman has it.
 type PlanFolder struct {
-	Dir     string
-	Already bool
+	Dir     string `json:"dir"`
+	Already bool   `json:"already"`
 }
 
 // PlanLink is a site to link; Taken when laman already has a link by that name.
 type PlanLink struct {
-	Name, Dir string
-	Taken     bool
+	Name  string `json:"name"`
+	Dir   string `json:"dir"`
+	Taken bool   `json:"taken"`
 }
 
 // Rename is a site's address in Laragon (From) and in laman (To).
-type Rename struct{ From, To string }
+type Rename struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
 
 // PlanDB is a Laragon database. Exists: laman has one by that name (never
 // overwritten). Copy: it looks like a backup. The UI ticks !Exists && !Copy.
 type PlanDB struct {
-	Name         string
-	Size         int64
-	Exists, Copy bool
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	Exists bool   `json:"exists"`
+	Copy   bool   `json:"copy"`
 }
 
 // SiteFit is an imported site whose PHP needs a different version.
 type SiteFit struct {
-	Site string
-	Fit  config.PHPFit
+	Site string        `json:"site"`
+	Fit  config.PHPFit `json:"fit"`
 }
 
 // BuildPlan works out what importing l into laman (cfg) would do. running
