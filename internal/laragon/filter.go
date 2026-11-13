@@ -22,6 +22,18 @@ var collationMap = map[string]string{
 	"utf8mb4_0900_bin":   "utf8mb4_bin",
 }
 
+// mapCollation turns a MySQL 8 utf8mb4_0900_* collation into the MariaDB
+// one the dump filter uses; any other name is returned unchanged.
+func mapCollation(c string) string {
+	if !strings.HasPrefix(c, "utf8mb4_0900_") {
+		return c
+	}
+	if to, ok := collationMap[c]; ok {
+		return to
+	}
+	return "utf8mb4_uca1400_ai_ci"
+}
+
 // Filter copies a mysqldump stream from src to dst, rewriting the MySQL 8
 // statements MariaDB rejects. Data lines (INSERT ... / REPLACE ...) are
 // copied byte-for-byte; every line keeps its original line ending.
@@ -156,12 +168,7 @@ func rewriteLine(line string, inLit *bool) string {
 	}
 	masked, lits := maskLiterals(body, inLit)
 	if strings.Contains(masked, "utf8mb4_0900_") {
-		masked = collation0900.ReplaceAllStringFunc(masked, func(m string) string {
-			if to, ok := collationMap[m]; ok {
-				return to
-			}
-			return "utf8mb4_uca1400_ai_ci"
-		})
+		masked = collation0900.ReplaceAllStringFunc(masked, mapCollation)
 	}
 	if strings.Contains(masked, "/*!") {
 		masked = versionedComment.ReplaceAllStringFunc(masked, func(m string) string {
