@@ -33,8 +33,10 @@ type importOpts struct {
 }
 
 // importResult is what an import did; it is written to
-// logs/import-laragon.json for the dashboard. Failed is keyed by database
-// name, project folder path or link name.
+// logs/import-laragon.json for the dashboard. Failed maps "db:<name>",
+// "folder:<path>", "link:<name>" or "config:<path>" to the reason.
+// NeedsPassword: Laragon's MySQL refused the password (none could be
+// asked for), so no database was copied.
 type importResult struct {
 	Folders, Links  []string
 	Copied, Skipped []string
@@ -42,7 +44,14 @@ type importResult struct {
 	Renamed         []laragon.Rename
 	ByHand          []string
 	PHP             []laragon.SiteFit
+	NeedsPassword   bool `json:"needsPassword"`
 }
+
+// Keys of importResult.Failed.
+func failDB(name string) string     { return "db:" + name }
+func failFolder(dir string) string  { return "folder:" + dir }
+func failLink(name string) string   { return "link:" + name }
+func failConfig(path string) string { return "config:" + path }
 
 const (
 	importLogName  = "import-laragon.log"
@@ -293,7 +302,7 @@ func applyProjects(cfg *config.Config, p laragon.Plan, res *importResult, log io
 			continue
 		}
 		if _, err := cfg.AddSitesDir(f.Dir); err != nil {
-			res.Failed[f.Dir] = err.Error()
+			res.Failed[failFolder(f.Dir)] = err.Error()
 			fmt.Fprintf(log, "Could not add the project folder %s: %v\n", f.Dir, err)
 			continue
 		}
@@ -310,7 +319,7 @@ func applyProjects(cfg *config.Config, p laragon.Plan, res *importResult, log io
 			continue
 		}
 		if fi, err := os.Stat(l.Dir); err != nil || !fi.IsDir() {
-			res.Failed[l.Name] = fmt.Sprintf("%s is not a folder", l.Dir)
+			res.Failed[failLink(l.Name)] = fmt.Sprintf("%s is not a folder", l.Dir)
 			fmt.Fprintf(log, "Could not link %s: %s is not a folder\n", l.Name, l.Dir)
 			continue
 		}
@@ -323,6 +332,57 @@ func applyProjects(cfg *config.Config, p laragon.Plan, res *importResult, log io
 		fmt.Fprintf(log, "Linked %s -> %s\n", l.Name, l.Dir)
 	}
 	return changed
+}
+
+// applyAndSave adds the plan's folders and links to the config as it is
+// on disk now (the dashboard may have changed it since the plan was made),
+// saves it and tells the daemon. A failed save is recorded in res and
+// nothing is then reported as added. It returns the config it used.
+func applyAndSave(p laragon.Plan, res *importResult, log io.Writer) (*config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	if !applyProjects(cfg, p, res, log) {
+		return cfg, nil
+	}
+	if err := cfg.Save(); err != nil {
+		res.Failed[failConfig(config.Path())] = err.Error()
+		fmt.Fprintf(log, "Could not save the config, so no folder or link was added: %v\n", err)
+		res.Folders, res.Links = []string{}, []string{}
+		return cfg, nil
+	}
+	if err := notifyDaemonErr(); err != nil {
+		fmt.Fprintln(log, err)
+	}
+	return cfg, nil
+}
+
+// importOutcome is the command's error after an apply: cancelled, Laragon's
+// MySQL wanting a password (laragon.ErrPassword itself, so the last line
+// reads "laman: Laragon's MySQL asked for a password"), or failed items.
+func importOutcome(res importResult, cancelled bool) error {
+	switch {
+	case cancelled:
+		return errors.New("import cancelled")
+	case res.NeedsPassword:
+		return laragon.ErrPassword
+	case len(res.Failed) > 0:
+		return fmt.Errorf("%d of the import's steps failed (see above)", len(res.Failed))
+	}
+	return nil
+}
+
+// sourceFailed records that Laragon's MySQL could not be started: every
+// selected database fails with err.
+func sourceFailed(res *importResult, selected []string, err error, log io.Writer) {
+	if errors.Is(err, laragon.ErrPassword) {
+		res.NeedsPassword = true
+	}
+	for _, n := range selected {
+		res.Failed[failDB(n)] = err.Error()
+	}
+	fmt.Fprintf(log, "Databases not copied: %v\n", err)
 }
 
 // lamanDatabases lists laman's MariaDB databases; an error means it does
@@ -444,35 +504,28 @@ func runImport(o importOpts, out io.Writer) error {
 		res.ByHand = append(res.ByHand, byHandLine(v))
 	}
 	fmt.Fprintln(out)
-	if applyProjects(cfg, p, &res, out) {
-		if err := cfg.Save(); err != nil {
-			return err
-		}
-		if err := notifyDaemonErr(); err != nil {
-			fmt.Fprintln(out, err)
-		}
+	cfg, err = applyAndSave(p, &res, out)
+	if err != nil {
+		return err
 	}
 	cancelled := copyDatabases(l, cfg, p, selected, &res, out)
 	if !cancelled {
 		// Reload: the dashboard may have changed the config meanwhile.
-		if c, err := config.Load(); err == nil {
+		c, err := config.Load()
+		if err == nil {
 			c.LaragonNotice = "imported"
-			if err := c.Save(); err != nil {
-				fmt.Fprintf(out, "Could not save the config: %v\n", err)
-			}
+			err = c.Save()
+		}
+		if err != nil {
+			res.Failed[failConfig(config.Path())] = err.Error()
+			fmt.Fprintf(out, "Could not save the config: %v\n", err)
 		}
 	}
 	if err := writeImportResult(res); err != nil {
 		fmt.Fprintf(out, "Could not write the import result: %v\n", err)
 	}
 	printSummary(out, res)
-	switch {
-	case cancelled:
-		return errors.New("import cancelled")
-	case len(res.Failed) > 0:
-		return fmt.Errorf("%d of the import's steps failed (see above)", len(res.Failed))
-	}
-	return nil
+	return importOutcome(res, cancelled)
 }
 
 // copyDatabases copies selected from Laragon's MySQL into laman's MariaDB.
@@ -482,12 +535,7 @@ func copyDatabases(l *laragon.Laragon, cfg *config.Config, p laragon.Plan, selec
 	if len(selected) == 0 {
 		return false
 	}
-	failAll := func(reason string) {
-		for _, n := range selected {
-			res.Failed[n] = reason
-		}
-		fmt.Fprintf(out, "Databases not copied: %s\n", reason)
-	}
+	failAll := func(reason string) { sourceFailed(res, selected, errors.New(reason), out) }
 	if running := l.RunningServers(); len(running) > 0 {
 		failAll("Laragon was started again (" + strings.Join(running, ", ") + "); quit it and import the databases again")
 		return false
@@ -550,7 +598,7 @@ func copyDatabases(l *laragon.Laragon, cfg *config.Config, p laragon.Plan, selec
 			failAll("cancelled")
 			return true
 		}
-		failAll(err.Error())
+		sourceFailed(res, selected, err, out)
 		return false
 	}
 	mu.Lock()
@@ -569,17 +617,17 @@ func copyDatabases(l *laragon.Laragon, cfg *config.Config, p laragon.Plan, selec
 	}
 	for _, n := range selected {
 		if isInterrupted() {
-			res.Failed[n] = "cancelled"
+			res.Failed[failDB(n)] = "cancelled"
 			continue
 		}
 		fmt.Fprintf(out, "Copying %s (%s)…\n", n, sizeLabel(size[n]))
 		if err := laragon.Copy(s, target, n, out); err != nil {
 			if isInterrupted() {
-				res.Failed[n] = "cancelled"
+				res.Failed[failDB(n)] = "cancelled"
 			} else {
-				res.Failed[n] = err.Error()
+				res.Failed[failDB(n)] = err.Error()
 			}
-			fmt.Fprintf(out, "  failed: %s\n", res.Failed[n])
+			fmt.Fprintf(out, "  failed: %s\n", res.Failed[failDB(n)])
 			continue
 		}
 		res.Copied = append(res.Copied, n)

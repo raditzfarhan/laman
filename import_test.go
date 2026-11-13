@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -243,7 +245,124 @@ func TestApplyProjects(t *testing.T) {
 	if cfg.Links["shop"] != shop || cfg.Links["api"] != `D:\mine\api` || cfg.Links["blog"] != "" {
 		t.Errorf("Links = %v", cfg.Links)
 	}
-	if res.Failed[filepath.Join(home, "gone")] == "" || res.Failed["lost"] == "" || len(res.Failed) != 2 {
+	if res.Failed["folder:"+filepath.Join(home, "gone")] == "" || res.Failed["link:lost"] == "" || len(res.Failed) != 2 {
 		t.Errorf("Failed = %v", res.Failed)
+	}
+}
+
+// A change saved (by the dashboard) between plan and apply survives the
+// import's save.
+func TestApplyAndSaveKeepsNewerConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LAMAN_HOME", filepath.Join(home, ".laman"))
+	www := filepath.Join(home, "laragon", "www")
+	if err := os.MkdirAll(www, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.SitesDir = filepath.Join(home, "Sites")
+	cfg.ControlPort = 1 // no daemon to notify
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(); err != nil { // what the plan was built from
+		t.Fatal(err)
+	}
+	p := laragon.Plan{Folders: []laragon.PlanFolder{{Dir: www}}}
+
+	// Meanwhile the dashboard links a site and picks a theme.
+	later, _ := config.Load()
+	later.Links["mine"] = `D:\mine`
+	later.Theme = "dark"
+	if err := later.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	res := importResult{Failed: map[string]string{}}
+	if _, err := applyAndSave(p, &res, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Links["mine"] != `D:\mine` || got.Theme != "dark" {
+		t.Errorf("dashboard change lost: links %v, theme %q", got.Links, got.Theme)
+	}
+	if len(got.MoreSitesDirs) != 1 || got.MoreSitesDirs[0] != www {
+		t.Errorf("MoreSitesDirs = %q", got.MoreSitesDirs)
+	}
+	if len(res.Failed) != 0 || !reflect.DeepEqual(res.Folders, []string{www}) {
+		t.Errorf("res = %+v", res)
+	}
+}
+
+// A failed save is a reported failure, not a fatal error, and nothing is
+// claimed as added.
+func TestApplyAndSaveReportsSaveFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LAMAN_HOME", filepath.Join(home, ".laman"))
+	www := filepath.Join(home, "laragon", "www")
+	if err := os.MkdirAll(www, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.SitesDir = filepath.Join(home, "Sites")
+	cfg.ControlPort = 1
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// A folder where the temp file goes makes Save fail.
+	if err := os.MkdirAll(filepath.Join(config.Path()+".tmp", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := importResult{Failed: map[string]string{}}
+	if _, err := applyAndSave(laragon.Plan{Folders: []laragon.PlanFolder{{Dir: www}}}, &res, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if res.Failed["config:"+config.Path()] == "" || len(res.Folders) != 0 {
+		t.Errorf("res = %+v", res)
+	}
+}
+
+func TestImportOutcome(t *testing.T) {
+	if err := importOutcome(importResult{}, false); err != nil {
+		t.Errorf("clean: %v", err)
+	}
+	pw := importResult{NeedsPassword: true, Failed: map[string]string{"db:acme": laragon.ErrPassword.Error(), "folder:x": "gone"}}
+	err := importOutcome(pw, false)
+	if !errors.Is(err, laragon.ErrPassword) || err.Error() != "Laragon's MySQL asked for a password" {
+		t.Errorf("password: %v", err)
+	}
+	if err := importOutcome(pw, true); err == nil || errors.Is(err, laragon.ErrPassword) {
+		t.Errorf("cancelled: %v", err)
+	}
+	if err := importOutcome(importResult{Failed: map[string]string{"db:acme": "boom"}}, false); err == nil {
+		t.Error("failed item: want an error")
+	}
+}
+
+func TestSourceFailed(t *testing.T) {
+	res := importResult{Failed: map[string]string{}}
+	sourceFailed(&res, []string{"acme", "shop"}, laragon.ErrPassword, io.Discard)
+	if !res.NeedsPassword || res.Failed["db:acme"] == "" || res.Failed["db:shop"] == "" {
+		t.Errorf("password: %+v", res)
+	}
+	res = importResult{Failed: map[string]string{}}
+	sourceFailed(&res, []string{"acme"}, errors.New("no MySQL"), io.Discard)
+	if res.NeedsPassword || res.Failed["db:acme"] != "no MySQL" {
+		t.Errorf("other: %+v", res)
+	}
+}
+
+func TestImportResultJSON(t *testing.T) {
+	b, err := json.Marshal(importResult{NeedsPassword: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"needsPassword":true`, `"Folders"`, `"Failed"`, `"Copied"`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("JSON lacks %s: %s", k, b)
+		}
 	}
 }
