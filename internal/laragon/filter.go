@@ -50,14 +50,14 @@ var placeholder = regexp.MustCompile("\x00([0-9]+)\x00")
 
 // scanLiteral returns the end index of a single-quoted literal body starting at
 // i (already past the opening quote or at continued text) and whether it closed.
-func scanLiteral(body string, i int) (int, bool) {
+func scanLiteral(body string, i int, q byte) (int, bool) {
 	for i < len(body) {
 		switch body[i] {
 		case '\x5c':
 			i += 2
 			continue
-		case '\'':
-			if i+1 < len(body) && body[i+1] == '\'' {
+		case q:
+			if i+1 < len(body) && body[i+1] == q {
 				i += 2
 				continue
 			}
@@ -85,7 +85,7 @@ func maskLiterals(body string, inLit *bool) (string, []string) {
 	i := 0
 	for i < len(body) {
 		if *inLit {
-			j, closed := scanLiteral(body, i)
+			j, closed := scanLiteral(body, i, '\'')
 			emit(body[i:j])
 			i = j
 			*inLit = !closed
@@ -93,7 +93,7 @@ func maskLiterals(body string, inLit *bool) (string, []string) {
 		}
 		switch c := body[i]; {
 		case c == '\'':
-			j, closed := scanLiteral(body, i+1)
+			j, closed := scanLiteral(body, i+1, '\'')
 			emit(body[i:j])
 			i = j
 			*inLit = !closed
@@ -106,9 +106,25 @@ func maskLiterals(body string, inLit *bool) (string, []string) {
 				out.WriteString(body[i : i+j+2])
 				i += j + 2
 			}
-		case c == '-' && strings.HasPrefix(body[i:], "-- "):
+		case c == '"':
+			// double-quoted string: masked like a literal, never carried across lines
+			j, _ := scanLiteral(body, i+1, '"')
+			emit(body[i:j])
+			i = j
+		case c == '#' || (c == '-' && strings.HasPrefix(body[i:], "--") &&
+			(i+2 == len(body) || body[i+2] == ' ' || body[i+2] == '\t')):
 			out.WriteString(body[i:])
 			i = len(body)
+		case c == '/' && strings.HasPrefix(body[i:], "/*") && !strings.HasPrefix(body[i:], "/*!") && !strings.HasPrefix(body[i:], "/*M!"):
+			// plain block comment: skip to its end on this line (or the line end)
+			j := strings.Index(body[i+2:], "*/")
+			if j < 0 {
+				out.WriteString(body[i:])
+				i = len(body)
+			} else {
+				out.WriteString(body[i : i+2+j+2])
+				i += 2 + j + 2
+			}
 		default:
 			out.WriteByte(c)
 			i++
@@ -118,8 +134,14 @@ func maskLiterals(body string, inLit *bool) (string, []string) {
 }
 
 func rewriteLine(line string, inLit *bool) string {
-	if !*inLit && (strings.HasPrefix(line, "INSERT ") || strings.HasPrefix(line, "REPLACE ")) {
+	// Data statements are always one complete line: pass through and heal any stuck state.
+	if strings.HasPrefix(line, "INSERT ") || strings.HasPrefix(line, "REPLACE ") {
+		*inLit = false
 		return line
+	}
+	// Statement markers cannot be inside a real literal in mysqldump output.
+	if strings.HasPrefix(line, "DELIMITER ") || strings.HasPrefix(line, "-- ") {
+		*inLit = false
 	}
 	body, ending := line, ""
 	if strings.HasSuffix(body, "\n") {

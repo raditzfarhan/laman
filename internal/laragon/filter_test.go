@@ -128,8 +128,51 @@ func TestFilterSkipsQuotedLiterals(t *testing.T) {
 }
 
 func TestFilterMultilineLiteral(t *testing.T) {
-	in := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\nINSERT INTO z' COLLATE utf8mb4_0900_bin;\nnext utf8mb4_0900_bin\n"
-	want := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\nINSERT INTO z' COLLATE utf8mb4_bin;\nnext utf8mb4_bin\n"
+	in := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\n  INSERT INTO z' COLLATE utf8mb4_0900_bin;\nnext utf8mb4_0900_bin\n"
+	want := "SET @a = 'line one utf8mb4_0900_ai_ci\nDEFINER=`a`@`b` /*!80016 x */ still text\n  INSERT INTO z' COLLATE utf8mb4_bin;\nnext utf8mb4_bin\n"
+	if got := runFilter(t, in); got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+func TestFilterPhantomLiteralDoesNotStick(t *testing.T) {
+	ins := "INSERT INTO `n` VALUES ('utf8mb4_0900_bin');\n"
+	for _, pre := range []string{
+		"/* don't */\n",
+		"# don't\n",
+		"SELECT \"it's\";\n",
+		"--\tdon't\n",
+		"-- don't\n",
+		"/* don't\n",
+		"SELECT 'it' ; /* don't \n",
+	} {
+		if got := runFilter(t, pre+ins); got != pre+ins {
+			t.Errorf("after %q: got %q", pre, got)
+		}
+	}
+	// stuck state heals at DELIMITER / section comments / data lines
+	if got := runFilter(t, "SELECT 'oops\nDELIMITER ;;\nx utf8mb4_0900_bin\n"); got != "SELECT 'oops\nDELIMITER ;;\nx utf8mb4_bin\n" {
+		t.Errorf("DELIMITER heal: %q", got)
+	}
+	if got := runFilter(t, "SELECT 'oops\n-- Dumping\nx utf8mb4_0900_bin\n"); got != "SELECT 'oops\n-- Dumping\nx utf8mb4_bin\n" {
+		t.Errorf("-- heal: %q", got)
+	}
+	if got := runFilter(t, "SELECT 'oops\n"+ins+"x utf8mb4_0900_bin\n"); got != "SELECT 'oops\n"+ins+"x utf8mb4_bin\n" {
+		t.Errorf("INSERT heal: %q", got)
+	}
+}
+
+func TestFilterVersionedCommentLiteralProtected(t *testing.T) {
+	in := "/*!50003 SET x = 'utf8mb4_0900_bin' */ utf8mb4_0900_bin;\n"
+	want := "/*!50003 SET x = 'utf8mb4_0900_bin' */ utf8mb4_bin;\n"
+	if got := runFilter(t, in); got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+func TestFilterDoubleQuotedStringProtected(t *testing.T) {
+	in := "SELECT \"utf8mb4_0900_bin \"\"q\"\"\" , utf8mb4_0900_bin;\n"
+	want := "SELECT \"utf8mb4_0900_bin \"\"q\"\"\" , utf8mb4_bin;\n"
 	if got := runFilter(t, in); got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
