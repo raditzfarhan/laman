@@ -150,9 +150,9 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .site .icon.on, .site .icon.on:disabled { color: var(--genting); opacity: 1; cursor: default; }
 .site .icon.busy svg { animation: spin .8s linear infinite; }
 .site .sharegrp { display: inline-flex; align-items: center; }
-.site .phpfit { display: inline-flex; align-items: center; gap: 8px; color: var(--warn); font-size: 13px; }
-.site .fitmark { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--warn-bg); color: var(--warn); font-weight: 700; font-size: 12px; cursor: default; }
-.site .phpfit button.inline { padding: 3px 10px; font-size: 13px; background: var(--warn-bg); color: var(--warn); border-color: currentColor; }
+.site .phpfit, .impphp .phpfit { display: inline-flex; align-items: center; gap: 8px; color: var(--warn); font-size: 13px; }
+.site .fitmark, .impphp .fitmark { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--warn-bg); color: var(--warn); font-weight: 700; font-size: 12px; cursor: default; }
+.site .phpfit button.inline, .impphp .phpfit button.inline { padding: 3px 10px; font-size: 13px; background: var(--warn-bg); color: var(--warn); border-color: currentColor; }
 .site .sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
 .editor-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 0; }
 .editor-pick label { display: flex; align-items: center; gap: 10px; }
@@ -244,6 +244,79 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .folder .fnames button:not(.linkish) { padding: 3px 12px; font-size: 13px; }
 .folder .fadd:focus-visible { outline: 2px solid var(--genting); outline-offset: 1px; }
 @media (max-width: 720px) { .folder { grid-template-columns: minmax(0, 1fr) auto; } .folder .facts { grid-column: 1 / -1; } }
+.quietlink { color: var(--muted); font-size: 13px; text-decoration: none; }
+.quietlink:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--genting); text-underline-offset: 3px; }
+.quietlink[hidden] { display: none; }
+
+/* ---- Import from Laragon ---- */
+.impfrom { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: -6px 0 16px; font-size: 13px; color: var(--muted); }
+.impfrom[hidden] { display: none; }
+.impfrom .mono { color: var(--ink); overflow-wrap: anywhere; }
+.impfrom form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 100%; }
+.impfrom form[hidden] { display: none; }
+.impfrom input, .imppass input { font: 13px var(--mono); color: var(--ink); background: var(--panel); border: 1px solid var(--field); border-radius: 7px; padding: 5px 10px; flex: 0 1 340px; min-width: 0; }
+.impfrom input:focus-visible, .imppass input:focus-visible { outline: 2px solid var(--genting); outline-offset: 1px; }
+.imp .note { margin-bottom: 16px; }
+.imp .note a { color: inherit; }
+.impsect { margin-bottom: 26px; }
+.impgrp + .impgrp { border-top: 1px solid var(--line); }
+.impgrp h3 { margin: 0; padding: 12px 18px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.impgrp .why { margin: 0; padding: 0 18px 8px; font-size: 13px; color: var(--muted); max-width: 76ch; }
+.improw { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 2px 16px; padding: 8px 18px; }
+.improw + .improw { border-top: 1px solid var(--line); }
+.impgrp .improw:last-child { padding-bottom: 12px; }
+.improw .main { min-width: 0; font: 13px var(--mono); overflow-wrap: anywhere; }
+.improw .main .arrow { color: var(--muted); padding: 0 6px; }
+.improw .side { font-size: 13px; color: var(--muted); text-align: right; }
+.improw .sub { grid-column: 1 / -1; font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.improw.off .main { color: var(--faint); }
+.improw.warn .main { font-family: inherit; color: var(--warn); }
+.impgrp .after { margin: 0; padding: 0 18px 12px; font-size: 13px; color: var(--ink); }
+.impdb { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 16px; padding: 8px 18px; }
+.impdb + .impdb { border-top: 1px solid var(--line); }
+.impdb label { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
+.impdb input { margin: 0; flex: none; width: 15px; height: 15px; accent-color: var(--genting); cursor: pointer; }
+.impdb input:disabled, .impdb input:disabled + .name { cursor: default; }
+.impdb .name { font: 13px var(--mono); overflow-wrap: anywhere; min-width: 0; }
+.impdb .size { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.impdb.off .name { color: var(--faint); }
+.impdb .tag { margin-left: 0; flex: none; }
+.sect-head .impsel { display: flex; gap: 12px; }
+.impphp .improw { align-items: center; }
+.impphp .improw .main { font-family: inherit; font-size: 14px; }
+.impphp .improw .main b { font-weight: 650; }
+.impphp .ok { color: var(--ok); }
+.imprun { padding: 14px 18px; }
+.imprun[hidden], .imprun [hidden] { display: none; }
+.impacts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.impacts .what { color: var(--muted); font-size: 13px; }
+.imprun .job { margin: 0; }
+.imprun .impacts + .job:not(:empty) { margin-top: 10px; }
+.imprun .step { display: flex; align-items: center; gap: 10px; margin: 0; font-weight: 600; }
+.imprun .spin, .impdone .spin { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--genting); animation: spin .8s linear infinite; }
+.imprun h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+.imprun pre { height: auto; max-height: 320px; min-height: 0; padding: 10px 12px; margin-top: 10px; border-radius: 8px; }
+.imprun .job:empty { display: none; }
+.imprun .job:empty + pre { margin-top: 0; }
+.impdone .improw .main .arrow { padding: 0; }
+.impdone { margin-bottom: 26px; }
+.impdone .head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 4px; }
+.impdone .head h2 { font-size: 16px; }
+.impdone .head h2:focus { outline: none; }
+.impdone .head .dot { width: 9px; height: 9px; }
+.impdone > .why { margin: 0; padding: 0 18px 10px; color: var(--muted); max-width: 76ch; }
+.impdone .improw .main { display: flex; align-items: baseline; gap: 10px; }
+.impdone .improw .main .dot { transform: translateY(-1px); }
+.impdone .improw .reason { grid-column: 1 / -1; padding-left: 18px; font-size: 13px; color: var(--bad); overflow-wrap: anywhere; }
+.imppass { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; margin: 0; padding: 12px 18px 14px; border-top: 1px solid var(--line); }
+.imppass label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); flex: 0 1 360px; min-width: 0; }
+.imppass label input { flex: none; width: 100%; }
+.imppass .err { flex-basis: 100%; margin: 0; font-size: 13px; }
+.impdone .acts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 18px 14px; border-top: 1px solid var(--line); }
+@media (max-width: 720px) {
+  .improw, .impdb { grid-template-columns: minmax(0, 1fr); }
+  .improw .side { text-align: left; }
+}
 
 /* ---- Sharing ---- */
 .sect-head.spaced { margin-top: 30px; }
@@ -538,10 +611,38 @@ body.down .view, body.down .notes { display: none; }
       <div class="view-head">
         <div><h1 id="folders-title">Project folders</h1>
         <p>Every folder inside one of these becomes a site at <span class="mono">&lt;folder&gt;.test</span>. A prefix keeps names apart when two folders hold projects with the same name.</p></div>
+        <div class="tools"><a class="quietlink" id="laragonlink" href="#import" hidden>Import from Laragon</a></div>
       </div>
       <div class="panel folders" id="folders"></div>
       <div class="sect-head spaced"><h2 id="editor-title">Code editor</h2><span class="hint">What the <span class="mono">&lt;/&gt;</span> button on each site opens</span></div>
       <div class="panel pad" id="editorpick" aria-labelledby="editor-title"></div>
+    </section>
+
+    <section class="view imp" data-view="import" hidden aria-labelledby="import-title">
+      <div class="view-head">
+        <div><h1 id="import-title">Import from Laragon</h1>
+        <p>Adds Laragon's project folders to laman and copies the databases you pick. Laragon itself stays as it is.</p></div>
+      </div>
+      <div class="impfrom" id="impfrom">
+        <span id="impwhere"></span>
+        <button class="linkish" id="impelse" aria-expanded="false" aria-controls="impfromform">Laragon is somewhere else</button>
+        <form id="impfromform" hidden novalidate>
+          <input type="text" id="impfromdir" placeholder="D:\laragon" aria-label="Laragon folder" spellcheck="false" autocomplete="off">
+          <button type="submit">Look there</button>
+          <button type="button" class="linkish" id="impfromdef">Use C:\laragon</button>
+        </form>
+      </div>
+      <div id="impblock" role="status" aria-live="polite"></div>
+      <div id="impdone"></div>
+      <div id="impplan"></div>
+      <div class="panel imprun" id="imprun" hidden>
+        <div class="impacts" id="impacts">
+          <button class="primary" id="impgo">Import</button>
+          <span class="what" id="impwhat"></span>
+        </div>
+        <p class="job" id="impjob" role="status"></p>
+        <pre id="implog" tabindex="0" aria-label="Import progress" hidden></pre>
+      </div>
     </section>
 
     <section class="view" data-view="apps" hidden aria-labelledby="apps-title">

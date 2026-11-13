@@ -133,7 +133,9 @@ function draw(force) {
     v.onclick = checkUpdate;
   }
 
-  const notesData = [onHome, status.hostsStale, status.notes, status.httpsNote, status.httpsPort, status.httpsTrusted, hostsJob && job, up.available, up.running];
+  const laragon = status.laragon || {};
+  $("laragonlink").hidden = !laragon.found;
+  const notesData = [onHome, status.hostsStale, status.notes, status.httpsNote, status.httpsPort, status.httpsTrusted, hostsJob && job, up.available, up.running, laragon.notice];
   if (changed("notes", notesData)) {
     const notes = [];
     if (onHome && up.available) {
@@ -159,7 +161,13 @@ function draw(force) {
       if (status.httpsNote) notes.push([status.httpsNote]);
       else if (status.httpsPort > 0 && !status.httpsTrusted) notes.push(["HTTPS works, but browsers will warn until you run ", el("code", {}, "laman trust"), "."]);
     }
-    $("notes").replaceChildren(...notes.map((parts) => el("div", { class: "note" }, parts)));
+    // An offer, not a problem: it doesn't count as a note in the summary.
+    const offer = onHome && laragon.notice ? el("div", { class: "note info" },
+      el("span", {}, "Laragon found — bring your projects and databases into laman? ",
+        el("button", { class: "inline", onclick: () => { location.hash = "#import"; } }, "Import"), " ",
+        el("button", { class: "inline", title: "Hide this; Import from Laragon stays under Project folders",
+          onclick: () => act(() => api("POST", "/api/import/laragon/dismiss")) }, "Not now"))) : null;
+    $("notes").replaceChildren(...notes.map((parts) => el("div", { class: "note" }, parts)), ...(offer ? [offer] : []));
   }
 
   const installed = vers?.versions.find((v) => v.kind === "php")?.installed || [];
@@ -199,6 +207,7 @@ function draw(force) {
   if (shareCfg && changed("sharing", [shareCfg, shareEditing])) renderSharing();
   if (queues && changed("queues", [queues, [...openQueues], queueJobs, clearing, [...othersOpen], $("qfind").value])) renderQueues();
   if (exts && changed("exts", [exts, $("extfilter").value, vers?.versions.find((v) => v.kind === "php")?.installed])) renderExts();
+  drawImport();
 }
 
 // Job messages ("Installed PHP 8.4") stay 10 seconds after the job ends;
@@ -334,7 +343,11 @@ function rowEnds(s, open = true, share = null) {
 // runs on: a mark with the reason, and the one action that fixes it (use an
 // installed PHP, install one, or a note that none fits). Reused by the
 // Laragon import.
-function phpFitAction(siteName, fit) {
+// The daemon sends Go's field names (Needs, From, RunsOn, Use, Install).
+const fitOf = (f) => ({ needs: f.needs ?? f.Needs ?? "", from: f.from ?? f.From ?? "", runsOn: f.runsOn ?? f.RunsOn ?? "",
+  use: f.use ?? f.Use ?? "", install: f.install ?? f.Install ?? "" });
+function phpFitAction(siteName, raw) {
+  const fit = fitOf(raw);
   const tip = `${fit.from} asks for PHP ${fit.needs}; it runs on ${short(fit.runsOn)}`;
   const action = fit.use
     ? el("button", { class: "inline", title: tip, onclick: () => setSitePHP(siteName, fit.use) }, `Use PHP ${short(fit.use)}`)
@@ -1155,8 +1168,374 @@ function renderEditors() {
     el("span", { class: "fine", style: "margin:0" }, "Also ", el("code", {}, "laman editor <name>"), " in a terminal.")));
 }
 
+// Import from Laragon (#import): what the import would do, the databases to
+// copy, then the run (`laman import laragon` as the background job, like New
+// project) with its progress, and what it did. The plan is only read here;
+// the command works it out again when it runs.
+const imp = {
+  from: "",           // folder typed under "Laragon is somewhere else" ("" = C:\laragon)
+  plan: null,         // GET /api/import/laragon
+  error: "",          // why the plan could not be read
+  loading: false,
+  loadedAt: 0,
+  picked: new Set(),  // databases to copy
+  phase: "plan",      // plan, running or done
+  startedAt: 0,
+  sentDBs: [],        // the databases the run was asked to copy
+  lines: [],          // the run's progress: the last lines of its log
+  result: null,       // what the run did; null when it stopped before changing anything
+  jobError: "",       // the run's last line when it failed
+  retryDBs: [],       // databases waiting for Laragon's MySQL password
+  triedPassword: false,
+};
+let focusDone = false; // move focus to the summary once it is drawn
+const IMPORT_TITLE = /^Importing from Laragon/;
+const tldOf = () => apps?.tld || "test";
+const phpLine = (v) => short(v).split(".").slice(0, 2).join(".");
+const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+const joinAnd = (parts) => parts.length < 2 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+function fmtSize(b) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+  return `${i && b < 10 ? b.toFixed(1) : Math.round(b)} ${units[i]}`;
+}
+const importNeedsPassword = () => !!imp.result?.needsPassword || /asked for a password/i.test(imp.jobError);
+
+function openImport() {
+  if (imp.phase === "plan") loadImportPlan();
+}
+
+async function loadImportPlan() {
+  if (imp.loading) return;
+  imp.loading = true;
+  imp.loadedAt = Date.now();
+  const from = imp.from;
+  let plan = null, error = "";
+  try { plan = await api("GET", "/api/import/laragon" + (from ? `?from=${encodeURIComponent(from)}` : "")); } catch (e) { error = e.message; }
+  imp.loading = false;
+  if (from !== imp.from) { loadImportPlan(); return; } // the folder changed meanwhile
+  const prev = imp.plan;
+  imp.plan = plan;
+  imp.error = error;
+  if (plan) {
+    // Tick what is new and not a copy, once; later polls keep the user's choice.
+    const fresh = !prev || prev.Root !== plan.Root || prev.mariadbOff !== plan.mariadbOff;
+    const can = new Set(plan.mariadbOff ? [] : plan.DBs.filter((d) => !d.Exists).map((d) => d.Name));
+    imp.picked = fresh ? new Set(plan.DBs.filter((d) => can.has(d.Name) && !d.Copy).map((d) => d.Name))
+      : new Set([...imp.picked].filter((n) => can.has(n)));
+  }
+  render();
+}
+
+async function loadImportLog() {
+  let log;
+  try { log = await api("GET", "/api/import/laragon/log"); } catch { return; }
+  if (imp.phase !== "running") return;
+  imp.lines = log.lines || [];
+  // The job's state comes with each refresh; one sent before the POST may
+  // still say "not running", hence the wait before believing it.
+  const job = vers?.job || {};
+  const age = Date.now() - imp.startedAt;
+  if (!job.running && age > 2500 && (log.result || job.error || age > 6000)) {
+    imp.phase = "done";
+    imp.result = log.result;
+    imp.jobError = job.error || "";
+    imp.retryDBs = !importNeedsPassword() ? []
+      : log.result ? Object.keys(log.result.Failed || {}).filter((k) => k.startsWith("db:")).map((k) => k.slice(3)) : imp.sentDBs;
+    focusDone = true;
+    drawn = {};
+    refresh(); // the new sites, and the Home note goes
+  }
+  render();
+}
+
+async function runImport(dbs, password) {
+  const was = { phase: imp.phase, lines: imp.lines };
+  lastAct = Date.now();
+  Object.assign(imp, { phase: "running", startedAt: Date.now(), sentDBs: dbs, lines: [] });
+  render();
+  $("implog").focus({ preventScroll: true });
+  try {
+    const job = await api("POST", "/api/import/laragon", { from: imp.from, dbs, password: password || "" });
+    if (vers) vers.job = job;
+  } catch (e) {
+    Object.assign(imp, was); // back to the plan, or to the summary
+    alertNote(e.message);
+    if (imp.phase === "plan") { loadImportPlan(); $("impgo").focus({ preventScroll: true }); }
+  }
+  render();
+}
+
+// The password form outlives redraws, so what is typed stays.
+const pwInput = el("input", { type: "password", id: "imppw", autocomplete: "off", spellcheck: "false" });
+const pwHint = el("span");
+const pwForm = el("form", { class: "imppass", novalidate: true, onsubmit: (e) => {
+  e.preventDefault();
+  const pw = pwInput.value;
+  if (!pw) { pwInput.focus(); return; }
+  pwInput.value = "";
+  imp.triedPassword = true;
+  runImport(imp.retryDBs, pw);
+} },
+  el("label", {}, pwHint, pwInput),
+  el("button", { type: "submit", class: "primary" }, "Try again"));
+
+$("impelse").addEventListener("click", () => {
+  const form = $("impfromform");
+  form.hidden = !form.hidden;
+  $("impelse").setAttribute("aria-expanded", String(!form.hidden));
+  if (!form.hidden) $("impfromdir").focus();
+});
+$("impfromform").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const dir = $("impfromdir").value.trim().replace(/^"(.*)"$/, "$1");
+  if (!dir) { $("impfromdir").focus(); return; }
+  imp.from = dir;
+  imp.plan = null;
+  render(true);
+  loadImportPlan();
+});
+$("impfromdef").addEventListener("click", () => {
+  imp.from = "";
+  imp.plan = null;
+  $("impfromdir").value = "";
+  $("impfromform").hidden = true;
+  $("impelse").setAttribute("aria-expanded", "false");
+  $("impelse").focus();
+  render(true);
+  loadImportPlan();
+});
+$("impgo").addEventListener("click", () => runImport([...imp.picked]));
+
+// Plan: re-read every 3 seconds while Laragon runs. Run: progress every second.
+setInterval(() => {
+  if (currentView() !== "import" || document.body.classList.contains("down")) return;
+  if (imp.phase === "running") loadImportLog();
+  else if (imp.phase === "plan" && imp.plan?.Blocked.length && Date.now() - imp.loadedAt >= 2900) loadImportPlan();
+}, 1000);
+
+function drawImport() {
+  const job = vers?.job || {};
+  // A run started in another tab, or before a reload, shows here too.
+  if (imp.phase === "plan" && job.running && IMPORT_TITLE.test(job.message || "")) {
+    Object.assign(imp, { phase: "running", startedAt: Date.now() - 10000, lines: [] });
+  }
+  if (currentView() !== "import") return;
+  const pre = $("implog");
+  const text = imp.lines.join("\n") || "Starting…";
+  if (pre.textContent !== text) {
+    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+    pre.textContent = text;
+    if (atEnd) pre.scrollTop = pre.scrollHeight;
+  }
+  const phpNow = imp.phase === "done" ? (imp.result?.PHP || []).map((e) => {
+    const s = status.sites.find((x) => x.name === e.Site);
+    return [e.Site, s?.php, s?.phpFit];
+  }) : null;
+  if (document.activeElement === pwInput) return; // a redraw would take the focus away
+  if (!changed("import", [imp.plan, imp.error, imp.loading && !imp.plan, imp.from, [...imp.picked], imp.phase, imp.result, imp.jobError,
+    imp.retryDBs, imp.triedPassword, job.running, phpNow, tldOf()])) return;
+  renderImport(job);
+  if (focusDone) {
+    focusDone = false;
+    const a = document.activeElement;
+    if (!a || a === document.body || a === pre || !a.isConnected) $("impdonetitle")?.focus({ preventScroll: true });
+  }
+}
+
+const impRow = (main, side, sub, cls = "") => el("div", { class: "improw " + cls },
+  el("span", { class: "main" }, main), side == null ? el("span") : el("span", { class: "side" }, side),
+  sub ? el("span", { class: "sub" }, sub) : null);
+const impGroup = (title, why, rows, after) => rows.length
+  ? el("div", { class: "impgrp" }, el("h3", {}, title), why ? el("p", { class: "why" }, why) : null, rows, after ? el("p", { class: "after" }, after) : null)
+  : null;
+const impTag = (text, title) => el("span", { class: "tag", title }, text);
+const APP_URL_LINE = "Update APP_URL and any OAuth callback that uses the old address.";
+
+function renderImport(job) {
+  const p = imp.plan;
+  const phase = imp.phase;
+  const tld = tldOf();
+
+  $("impfrom").hidden = phase !== "plan";
+  $("impwhere").replaceChildren(...(p ? ["Laragon at ", el("span", { class: "mono" }, p.Root)] : []));
+  $("impfromdef").hidden = !imp.from;
+  if (imp.error && $("impfromform").hidden) {
+    $("impfromform").hidden = false;
+    $("impelse").setAttribute("aria-expanded", "true");
+  }
+
+  // Laragon running (or not found) comes first.
+  const notes = [];
+  if (phase === "plan" && imp.error) notes.push(el("div", { class: "note err" }, el("span", {}, imp.error)));
+  if (phase === "plan" && p?.Blocked.length) {
+    notes.push(el("div", { class: "note" }, el("span", {},
+      `Quit Laragon (or click Stop All) first — still running: ${p.Blocked.join(", ")}. If Laragon starts its servers by itself, turn off its Start All automatically setting.`)));
+  }
+  $("impblock").replaceChildren(...notes);
+
+  $("impdone").replaceChildren(...(phase === "done" ? [importSummary(tld)] : []));
+  $("impplan").replaceChildren(...(phase === "plan" ? importPlan(p, tld) : phase === "done" ? [importPHP(imp.result?.PHP || [], true)].filter(Boolean) : []));
+
+  // The run panel: Import and what it does; then the progress.
+  const blocked = !!p?.Blocked.length;
+  const otherJob = job.running && phase === "plan";
+  $("imprun").hidden = phase === "plan" && !p;
+  $("impacts").hidden = phase !== "plan";
+  $("impgo").disabled = blocked || otherJob;
+  $("impwhat").textContent = !p ? "" : blocked ? "Quit Laragon first." : otherJob ? "Another install is running…" : importWhat(p);
+  const jobLine = $("impjob");
+  jobLine.className = phase === "running" ? "step" : "job";
+  jobLine.replaceChildren(...(phase === "running"
+    ? [el("span", { class: "spin", "aria-hidden": "true" }), "Importing… copying databases can take a few minutes."] : []));
+  $("implog").hidden = phase === "plan" || (phase === "done" && !imp.lines.length);
+}
+
+// "Adds 1 project folder, links 1 site and copies 3 databases (120 MB)."
+function importWhat(p) {
+  const folders = p.Folders.filter((f) => !f.Already).length;
+  const links = p.Links.filter((l) => !l.Taken).length;
+  const dbs = p.DBs.filter((d) => imp.picked.has(d.Name));
+  const parts = [];
+  if (folders) parts.push(`adds ${plural(folders, "project folder")}`);
+  if (links) parts.push(`links ${plural(links, "site")}`);
+  if (dbs.length) parts.push(`copies ${plural(dbs.length, "database")} (${fmtSize(dbs.reduce((n, d) => n + d.Size, 0))})`);
+  const s = joinAnd(parts);
+  return s ? s[0].toUpperCase() + s.slice(1) + "." : "Nothing new to import.";
+}
+
+function importPlan(p, tld) {
+  if (!p) return imp.error ? [] : [el("div", { class: "panel empty-state" }, "Reading Laragon's folders and databases…")];
+  const off = p.mariadbOff;
+
+  const projects = [
+    impGroup("Project folders", null, p.Folders.map((f) => impRow(tidy(f.Dir),
+      f.Already ? impTag("already in laman") : "each folder inside becomes a site", null, f.Already ? "off" : ""))),
+    impGroup("Sites outside www", null, p.Links.map((l) => impRow(`${l.Name}.${tld}`,
+      l.Taken ? impTag("name taken, skipped", `laman already has a site called ${l.Name}. Link this folder by hand under another name.`) : "gets linked",
+      tidy(l.Dir), l.Taken ? "off" : ""))),
+    impGroup("Addresses that change", null, p.Renamed.map((r) => impRow([r.From, el("span", { class: "arrow", "aria-label": "becomes" }, "→"), r.To])), APP_URL_LINE),
+    impGroup("Check by hand", `laman can't copy these Laragon settings (rewrites, proxies, or a name outside .${tld}). Set them up again after the import.`,
+      p.ByHand.map((v) => impRow(v.Host, null, tidy(v.File)))),
+    impGroup("Not served", null, p.Clashes.map((c) => impRow(c, null, null, "warn"))),
+  ];
+  const selectable = off ? [] : p.DBs.filter((d) => !d.Exists);
+  const dbRows = p.DBs.map((d) => {
+    const can = !off && !d.Exists;
+    const box = el("input", { type: "checkbox", checked: can && imp.picked.has(d.Name), disabled: !can,
+      onchange: (e) => { e.target.checked ? imp.picked.add(d.Name) : imp.picked.delete(d.Name); render(); } });
+    return el("div", { class: "impdb" + (d.Exists ? " off" : "") },
+      el("label", {}, box, el("span", { class: "name" }, d.Name),
+        d.Exists ? impTag("already in laman") : d.Copy ? impTag("looks like a copy") : null),
+      el("span", { class: "size" }, fmtSize(d.Size)));
+  });
+  const setAll = (on) => { imp.picked = new Set(on ? selectable.map((d) => d.Name) : []); render(); };
+
+  return [
+    el("section", { class: "impsect", "aria-labelledby": "imp-projects" },
+      el("div", { class: "sect-head" }, el("h2", { id: "imp-projects" }, "Projects")),
+      el("div", { class: "panel" }, projects.filter(Boolean))),
+    el("section", { class: "impsect", "aria-labelledby": "imp-dbs" },
+      el("div", { class: "sect-head" },
+        el("h2", { id: "imp-dbs" }, "Databases", p.DBs.length ? el("span", { class: "count-pill" }, String(p.DBs.length)) : null),
+        el("span", { class: "hint" }, "Laragon's databases are read, not changed."),
+        selectable.length > 1 ? el("span", { class: "impsel" },
+          el("button", { class: "linkish", onclick: () => setAll(true) }, "Select all"),
+          el("button", { class: "linkish", onclick: () => setAll(false) }, "None")) : null),
+      off ? el("div", { class: "note" }, el("span", {}, "laman's MariaDB isn't running, so databases can't be copied now. ",
+        el("a", { href: "#services" }, "Start it in Services"), ", then come back.")) : null,
+      el("div", { class: "panel" }, dbRows.length ? dbRows : el("div", { class: "empty-state" }, "Laragon has no databases of its own."))),
+    importPHP(p.PHP, false),
+  ].filter(Boolean);
+}
+
+// PHP: before the import a site isn't served yet, so this only says what it
+// needs; afterwards each row has the same Use / Install button as Home.
+function importPHP(list, live) {
+  if (!list.length) return null;
+  const rows = list.map((e) => {
+    const name = el("b", {}, e.Site);
+    if (!live) {
+      const fit = fitOf(e.Fit);
+      return impRow([name, ` needs PHP ${fit.needs}, would run on ${phpLine(fit.runsOn)}`],
+        fit.use ? `PHP ${short(fit.use)} fits` : "no installed PHP fits", fit.from);
+    }
+    const s = status.sites.find((x) => x.name === e.Site);
+    if (s && !s.phpFit) return impRow([name, ` runs on PHP ${phpLine(s.php)}`], el("span", { class: "ok" }, "fits"));
+    const fit = fitOf(s?.phpFit || e.Fit);
+    return impRow([name, ` needs PHP ${fit.needs}, runs on ${phpLine(fit.runsOn)}`], phpFitAction(e.Site, s?.phpFit || e.Fit), fit.from);
+  });
+  return el("section", { class: "impsect impphp", "aria-labelledby": "imp-php" },
+    el("div", { class: "sect-head" }, el("h2", { id: "imp-php" }, "PHP"),
+      el("span", { class: "hint" }, live ? "Pick a version that fits" : "You can pick a version once the import is done")),
+    el("div", { class: "panel" }, rows));
+}
+
+// What the run did, from logs/import-laragon.json. Failed keys are kind-prefixed.
+const FAILED_KIND = { db: "Database", folder: "Folder", link: "Link", config: "Saving" };
+function importSummary(tld) {
+  const r = imp.result;
+  const failed = Object.entries(r?.Failed || {});
+  const pw = importNeedsPassword();
+  const item = (dot, text, side, reason) => el("div", { class: "improw" },
+    el("span", { class: "main" }, el("span", { class: "dot " + dot, "aria-hidden": "true" }), text),
+    el("span", { class: "side" }, side),
+    reason ? el("span", { class: "reason" }, reason) : null);
+  const fail = ([key, why]) => {
+    const [kind, ...rest] = key.split(":");
+    const what = rest.join(":");
+    return item("bad", FAILED_KIND[kind] ? `${FAILED_KIND[kind]} ${kind === "folder" || kind === "config" ? tidy(what) : what}` : key, "failed", why);
+  };
+  let title, dot, why = null;
+  if (!r) {
+    title = imp.jobError ? "Nothing was imported" : "Nothing to import";
+    dot = imp.jobError ? "bad" : "";
+    why = imp.jobError || "laman already has everything Laragon offered.";
+  } else if (pw) {
+    title = "Almost done: the databases need a password";
+    dot = "warn";
+  } else if (failed.length) {
+    title = `Imported, with ${plural(failed.length, "problem")}`;
+    dot = "warn";
+  } else {
+    title = "Imported";
+    dot = "ok";
+  }
+  if (pw) why = `Laragon's MySQL asked for a password, so ${joinAnd(imp.retryDBs) || "the databases"} ${imp.retryDBs.length === 1 ? "wasn't" : "weren't"} copied.`;
+
+  const projects = r ? [
+    ...r.Folders.map((f) => item("ok", tidy(f), "added")),
+    ...r.Links.map((n) => item("ok", `${n}.${tld}`, "linked")),
+    ...failed.filter(([k]) => !k.startsWith("db:")).map(fail),
+  ] : [];
+  const dbs = r ? [
+    ...r.Copied.map((n) => item("ok", n, "copied")),
+    ...r.Skipped.map((n) => item("", n, "already in laman, skipped")),
+    ...failed.filter(([k]) => k.startsWith("db:") && !pw).map(fail),
+  ] : [];
+  pwHint.textContent = imp.triedPassword ? "That password didn't work. Laragon's MySQL password:" : "Laragon's MySQL password";
+
+  return el("section", { class: "panel impdone", "aria-labelledby": "impdonetitle" },
+    el("div", { class: "head" }, el("span", { class: "dot " + dot, "aria-hidden": "true" }), el("h2", { id: "impdonetitle", tabindex: "-1" }, title)),
+    why ? el("p", { class: "why" }, why) : null,
+    impGroup("Projects", null, projects),
+    impGroup("Databases", null, dbs),
+    r ? impGroup("Addresses that changed", null, r.Renamed.map((x) => impRow([x.From, el("span", { class: "arrow", "aria-label": "becomes" }, "→"), x.To])), APP_URL_LINE) : null,
+    r ? impGroup("Check by hand", null, r.ByHand.map((v) => impRow(v))) : null,
+    pw && imp.retryDBs.length ? pwForm : null,
+    el("div", { class: "acts" },
+      r && (r.Folders.length || r.Links.length || r.Copied.length) ? el("a", { class: "btn primary", href: "#home" }, "See your sites") : null,
+      el("button", { class: r ? "linkish" : "", onclick: () => {
+        Object.assign(imp, { phase: "plan", plan: null, result: null, jobError: "", lines: [], retryDBs: [], triedPassword: false });
+        render(true);
+        loadImportPlan();
+      } }, "Back to the plan")));
+}
+
 // Views: one per rail entry, chosen by the URL hash so reloads keep it.
-const VIEWS = ["home", "folders", "apps", "queues", "versions", "extensions", "services", "logs"];
+// "import" has no rail entry: Home's Laragon note and Project folders link to it.
+const VIEWS = ["home", "folders", "apps", "queues", "versions", "extensions", "services", "logs", "import"];
 const currentView = () => (VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "home");
 function showView() {
   const view = currentView();
@@ -1172,6 +1551,7 @@ function showView() {
   if (view === "queues") loadQueues();
   if (view === "services") loadShareSetup();
   if (view === "folders") loadEditors();
+  if (view === "import") openImport();
   render();
 }
 window.addEventListener("hashchange", showView);
