@@ -138,7 +138,7 @@ func TestPlanPHP(t *testing.T) {
 	}
 }
 
-func TestPlanLinkTakesOverFolderSite(t *testing.T) {
+func TestPlanLinkNameUsedByFolderSiteIsTaken(t *testing.T) {
 	l, cfg := planFixture(t)
 	elsewhere := t.TempDir()
 	os.MkdirAll(filepath.Join(cfg.SitesDir, "docs"), 0o755)
@@ -148,14 +148,24 @@ func TestPlanLinkTakesOverFolderSite(t *testing.T) {
 	write(t, filepath.Join(l.Root, "etc", "apache2", "sites-enabled", "custom2.conf"), autoConf("docs.test", slash))
 	l, _ = Find(l.Root)
 	p := BuildPlan(l, cfg, nil, nil)
-	found := false
-	for _, c := range p.Clashes {
-		if strings.Contains(c, `The link "docs"`) && strings.Contains(c, filepath.Join(cfg.SitesDir, "docs")) {
-			found = true
+	var link *PlanLink
+	for i := range p.Links {
+		if p.Links[i].Name == "docs" {
+			link = &p.Links[i]
 		}
 	}
-	if !found {
-		t.Errorf("Clashes = %q", p.Clashes)
+	if link == nil || !link.Taken {
+		t.Fatalf("Links = %+v", p.Links)
+	}
+	for _, c := range p.Clashes {
+		if strings.Contains(c, "docs") {
+			t.Errorf("unexpected clash %q", c)
+		}
+	}
+	for _, r := range p.Renamed {
+		if r.From == "docs.test" {
+			t.Errorf("taken link renamed: %+v", r)
+		}
 	}
 }
 

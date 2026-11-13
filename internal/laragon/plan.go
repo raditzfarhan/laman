@@ -2,7 +2,6 @@ package laragon
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -98,6 +97,11 @@ func BuildPlan(l *Laragon, cfg *config.Config, lamanDBs []string, running []stri
 	suffix := "." + strings.ToLower(cfg.TLD)
 	linkOf := map[string]string{} // vhost file -> link name
 	newLinks := map[string]bool{}
+	usedNames := map[string]bool{}
+	before, _ := sites.DiscoverAll(cp.Folders(), cp.TLD, cfg.ServedLinks())
+	for _, b := range before {
+		usedNames[b.Name] = true
+	}
 	byDir := map[string]string{} // lower-cased link dir -> link name
 	for _, v := range l.VHosts {
 		if !v.Custom {
@@ -119,27 +123,15 @@ func BuildPlan(l *Laragon, cfg *config.Config, lamanDBs []string, running []stri
 			continue
 		}
 		byDir[strings.ToLower(dir)] = name
-		_, taken := cp.Links[name]
+		// A link would replace a site laman already serves (links win over
+		// folders); the import never does that.
+		_, own := cp.Links[name]
+		taken := own || usedNames[name]
 		p.Links = append(p.Links, PlanLink{Name: name, Dir: filepath.Clean(v.Root), Taken: taken})
 		linkOf[v.File] = name
 		if !taken {
 			cp.Links[name] = filepath.Clean(v.Root)
 			newLinks[name] = true
-		}
-	}
-
-	// A new link wins over a project folder's site of the same name (that
-	// site is then not served); say so.
-	if len(newLinks) > 0 {
-		base, _ := sites.DiscoverAll(cp.Folders(), cp.TLD, cfg.ServedLinks())
-		for _, b := range base {
-			if !newLinks[b.Name] || b.Linked {
-				continue
-			}
-			if fi, err := os.Stat(cp.Links[b.Name]); err == nil && fi.IsDir() && !sameDir(b.Path, cp.Links[b.Name]) {
-				p.Clashes = append(p.Clashes, fmt.Sprintf("The link %q (%s) takes over %s.%s, so the project folder %s is not served. Rename one, or link it under another name.",
-					b.Name, cp.Links[b.Name], b.Name, cp.TLD, b.Path))
-			}
 		}
 	}
 
