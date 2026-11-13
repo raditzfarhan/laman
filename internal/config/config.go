@@ -73,6 +73,9 @@ type Config struct {
 	DevAuto map[string]bool `json:"devAuto,omitempty"`
 	// NoUpdateCheck stops the daily look for a newer laman release.
 	NoUpdateCheck bool `json:"noUpdateCheck,omitempty"`
+	// LaragonNotice is "imported" once `laman import laragon` has run, so
+	// the dashboard stops offering the import.
+	LaragonNotice string `json:"laragonNotice,omitempty"`
 }
 
 // Discover lists every site laman serves: project folders, links, apps

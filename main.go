@@ -73,6 +73,7 @@ Usage:
 
   laman sites                     list sites and URLs
   laman folders [add|remove] [path]  project folders: every folder inside one is a site
+  laman import laragon [--from dir]  bring Laragon's projects and databases into laman
   laman link [name] [path]        serve one folder outside your project folders (default: current dir)
   laman unlink <name>             remove a link
   laman dev [start|stop|log] [site]  run a Node app's dev server behind its .test name
@@ -128,6 +129,8 @@ func main() {
 		err = cmdSites()
 	case "folders", "folder":
 		err = cmdFolders(args)
+	case "import":
+		err = cmdImport(args)
 	case "link":
 		err = cmdLink(args)
 	case "unlink":
