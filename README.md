@@ -74,6 +74,20 @@ In the dashboard, Home has a **Project folders** panel. **Add folder…** opens 
 - **Folders that hold projects** (`shop\api`, `shop\web-app`) are tagged **projects inside**. **Serve the projects inside** on Home adds that folder as a project folder, so each one gets its own address (`shop-api.test`). Opening `shop.test` explains the same.
 - **Not websites:** folders with no `index.php`, `index.html` or `package.json` dev script (Terraform, Docker, docs, notes) go into a folded **Not websites** group at the bottom of Home and the localhost page. Their address shows "Nothing to open here" instead of a bare 404. laman looks again whenever files change.
 
+## Import from Laragon
+
+Coming from Laragon? laman can bring your projects and databases over:
+
+```
+laman import laragon [--from dir] [--dry-run] [--yes] [--db a,b | --no-db]
+```
+
+- **Quit Laragon first.** The import refuses to run while any Laragon server is up. `--dry-run` shows the plan without changing anything.
+- **Laragon is never changed:** its folders, vhosts, `laragon.ini`, hosts entries and databases are only read.
+- **Databases are copied** into laman's MariaDB (all of them, or pick with `--db a,b`, or skip with `--no-db`). One that already exists in laman is skipped, never overwritten.
+- **Addresses follow laman's names:** `acme_app` becomes `acme-app.test`, with no alias for the old Laragon name.
+- **PHP fit:** each imported site is checked against the PHP version it asks for in `composer.json`, with a warning (and a one-click or `laman isolate` fix) when the default doesn't fit. Nothing is switched for you.
+
 ## New projects
 
 `laman new` starts a project in your main project folder with laman's own PHP, Composer and Node, so it works at `<name>.test` right away:
@@ -357,6 +371,7 @@ The icon, tray mark and dashboard colours come from `../logo/kit` (see its `USAG
 | `laman xdebug on\|off` | Turn Xdebug on or off for this folder's PHP (installs it the first time) |
 | `laman new <name> [starter]` | Start a project: `laravel` (default), `laravel-react\|vue\|livewire`, `wordpress`, `php`, `vite` (see [New projects](#new-projects)) |
 | `laman app [install\|update\|remove\|open\|default] <name>` | Web apps: dbzuper, adminer, phpmyadmin (see [Apps](#apps)) |
+| `laman import laragon [--from dir] [--dry-run] [--yes] [--db a,b \| --no-db]` | Bring Laragon's projects and databases into laman (see [Import from Laragon](#import-from-laragon)) |
 | `laman db` | Open the default database app at `https://db.test` |
 | `laman composer [args]` | Run Composer with that same PHP, e.g. `laman composer create-project laravel/laravel blog`. Installs Composer (checksum-verified) on first use; `laman composer self-update` updates it |
 | `laman install mailpit` / `laman mail` | Install Mailpit, which catches every email your apps send, and open its inbox |
