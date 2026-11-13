@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -57,19 +58,45 @@ func (j *job) state() jobState {
 }
 
 // lines caches the list of PHP lines windows.php.net offers.
+// lines caches the installable PHP lines. mu only guards list/fetched, so
+// cached() never waits on the network; fetchMu lets one fetch run at a time.
 type lines struct {
 	mu      sync.Mutex
 	list    []string
 	fetched time.Time
+
+	fetchMu sync.Mutex
+	// fetch gets the lines (tests); nil means install.PHPLinesContext.
+	fetch func(ctx context.Context) ([]string, error)
+}
+
+// linesTimeout bounds one fetch of the PHP lines.
+const linesTimeout = 20 * time.Second
+
+func (l *lines) fresh() ([]string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.list, l.list != nil && time.Since(l.fetched) < time.Hour
 }
 
 func (l *lines) get() ([]string, error) {
+	if list, ok := l.fresh(); ok {
+		return list, nil
+	}
+	l.fetchMu.Lock()
+	defer l.fetchMu.Unlock()
+	if list, ok := l.fresh(); ok { // fetched while this one waited
+		return list, nil
+	}
+	fetch := l.fetch
+	if fetch == nil {
+		fetch = install.PHPLinesContext
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), linesTimeout)
+	defer cancel()
+	list, err := fetch(ctx)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.list != nil && time.Since(l.fetched) < time.Hour {
-		return l.list, nil
-	}
-	list, err := install.PHPLines()
 	if err != nil {
 		return l.list, err
 	}

@@ -1,6 +1,7 @@
 package install
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -160,8 +161,13 @@ func caBundle() (string, error) {
 
 // PHPLines lists the PHP lines (e.g. "8.4") windows.php.net currently offers.
 func PHPLines() ([]string, error) {
+	return PHPLinesContext(context.Background())
+}
+
+// PHPLinesContext is PHPLines, given up when ctx ends.
+func PHPLinesContext(ctx context.Context) ([]string, error) {
 	var rel map[string]map[string]json.RawMessage
-	if err := getJSON(phpReleases+"releases.json", &rel); err != nil {
+	if err := getJSONCtx(ctx, phpReleases+"releases.json", &rel); err != nil {
 		return nil, err
 	}
 	return keys(rel), nil

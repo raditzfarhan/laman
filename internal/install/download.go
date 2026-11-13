@@ -3,6 +3,7 @@ package install
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,7 +21,11 @@ import (
 var client = &http.Client{Timeout: 30 * time.Minute}
 
 func get(url string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", url, nil)
+	return getCtx(context.Background(), url)
+}
+
+func getCtx(ctx context.Context, url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +42,11 @@ func get(url string) (*http.Response, error) {
 }
 
 func getJSON(url string, v any) error {
-	resp, err := get(url)
+	return getJSONCtx(context.Background(), url, v)
+}
+
+func getJSONCtx(ctx context.Context, url string, v any) error {
+	resp, err := getCtx(ctx, url)
 	if err != nil {
 		return err
 	}
