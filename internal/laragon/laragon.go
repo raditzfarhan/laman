@@ -76,18 +76,33 @@ func Find(root string) (*Laragon, error) {
 	return l, nil
 }
 
-// RunningServers names the Laragon programs (httpd.exe, mysqld.exe...)
-// currently running from under <Root>\bin.
+// serverExes are the Laragon programs that are servers; the rest of bin
+// (terminal, git, editors, runtimes) must not block an import.
+var serverExes = map[string]bool{
+	"httpd.exe": true, "nginx.exe": true, "mysqld.exe": true, "mariadbd.exe": true,
+	"postgres.exe": true, "pg_ctl.exe": true, "redis-server.exe": true,
+	"memcached.exe": true, "mongod.exe": true, "php-cgi.exe": true, "mailpit.exe": true,
+}
+
+// RunningServers names the Laragon servers (httpd.exe, mysqld.exe...)
+// currently running from under <Root>in, lower-cased and sorted.
 func (l *Laragon) RunningServers() []string {
+	return serversIn(desktop.ProcessesUnder(filepath.Join(l.Root, "bin")))
+}
+
+// serversIn keeps the server programs among full exe paths, as sorted,
+// deduplicated lower-case base names.
+func serversIn(exes []string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, p := range desktop.ProcessesUnder(filepath.Join(l.Root, "bin")) {
-		n := filepath.Base(p)
-		if !seen[strings.ToLower(n)] {
-			seen[strings.ToLower(n)] = true
+	for _, p := range exes {
+		n := strings.ToLower(filepath.Base(p))
+		if serverExes[n] && !seen[n] {
+			seen[n] = true
 			out = append(out, n)
 		}
 	}
+	sort.Strings(out)
 	return out
 }
 

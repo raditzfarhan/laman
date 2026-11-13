@@ -164,3 +164,17 @@ func TestLooksLikeCopy(t *testing.T) {
 		}
 	}
 }
+
+func TestServersIn(t *testing.T) {
+	root := `C:\laragon`
+	got := serversIn([]string{
+		root + `\bin\apache\httpd-2.4\bin\httpd.exe`,
+		root + `\bin\git\bin\git.exe`,
+		root + `\bin\mysql\mysql-8.4\bin\MYSQLD.EXE`,
+		root + `\bin\cmder\vendor\conemu-maximus5\ConEmu64.exe`,
+		root + `\bin\apache\httpd-2.4\bin\httpd.exe`,
+	})
+	if want := []string{"httpd.exe", "mysqld.exe"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("serversIn = %v, want %v", got, want)
+	}
+}
