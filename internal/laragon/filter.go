@@ -9,27 +9,30 @@ import (
 )
 
 var (
-	collation0900 = regexp.MustCompile(`utf8mb4_0900_[a-z0-9_]+`)
+	// utf8mb4_0900_ai_ci and the language ones, e.g. utf8mb4_ja_0900_as_cs or utf8mb4_de_pb_0900_ai_ci.
+	collation0900 = regexp.MustCompile(`utf8mb4_(?:[a-z]+_){0,2}0900_[a-z0-9_]+`)
 	// A single versioned comment, non-greedy so it never spans past the first "*/".
 	versionedComment = regexp.MustCompile(`/\*!(\d{5})[ \t].*?\*/`)
 	definerClause    = regexp.MustCompile("DEFINER=(?:`[^`]*`|\x00[0-9]+\x00|\"[^\"]*\"|[A-Za-z0-9_$.-]+)@(?:`[^`]*`|\x00[0-9]+\x00|\"[^\"]*\"|[A-Za-z0-9_.%:-]+) ?")
 )
 
-var collationMap = map[string]string{
-	"utf8mb4_0900_ai_ci": "utf8mb4_uca1400_ai_ci",
-	"utf8mb4_0900_as_ci": "utf8mb4_uca1400_as_ci",
-	"utf8mb4_0900_as_cs": "utf8mb4_uca1400_as_cs",
-	"utf8mb4_0900_bin":   "utf8mb4_bin",
-}
-
-// mapCollation turns a MySQL 8 utf8mb4_0900_* collation into the MariaDB
-// one the dump filter uses; any other name is returned unchanged.
+// mapCollation turns a MySQL 8 0900 collation (utf8mb4_0900_* or a
+// language one such as utf8mb4_ja_0900_as_cs) into the MariaDB one the dump
+// filter uses: utf8mb4_uca1400_<ai_ci|as_ci|as_cs>, utf8mb4_bin for
+// utf8mb4_0900_bin, utf8mb4_uca1400_ai_ci for anything else. Other names are
+// returned unchanged.
 func mapCollation(c string) string {
-	if !strings.HasPrefix(c, "utf8mb4_0900_") {
+	if collation0900.FindString(c) != c {
 		return c
 	}
-	if to, ok := collationMap[c]; ok {
-		return to
+	if c == "utf8mb4_0900_bin" {
+		return "utf8mb4_bin"
+	}
+	switch suffix := c[strings.Index(c, "0900_")+len("0900_"):]; suffix {
+	case "ai_ci", "as_ci", "as_cs":
+		return "utf8mb4_uca1400_" + suffix
+	case "as_cs_ks": // MariaDB has no kana-sensitive variant
+		return "utf8mb4_uca1400_as_cs"
 	}
 	return "utf8mb4_uca1400_ai_ci"
 }
@@ -167,7 +170,7 @@ func rewriteLine(line string, inLit *bool) string {
 		return line
 	}
 	masked, lits := maskLiterals(body, inLit)
-	if strings.Contains(masked, "utf8mb4_0900_") {
+	if strings.Contains(masked, "0900_") {
 		masked = collation0900.ReplaceAllStringFunc(masked, mapCollation)
 	}
 	if strings.Contains(masked, "/*!") {

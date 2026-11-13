@@ -47,8 +47,24 @@ type Target struct {
 
 const (
 	startTimeout = 60 * time.Second
-	stopTimeout  = 20 * time.Second
+	// shutdownWait is how long a requested shutdown may take before mysqld
+	// counts as unresponsive and is killed.
+	shutdownWait = 120 * time.Second
+	adminTimeout = 20 * time.Second
+	killWait     = 20 * time.Second
 )
+
+// How Stop ended mysqld.
+const (
+	stopExited = "exited"     // it had already stopped
+	stopEvent  = "event"      // the MYSQLShutdown<pid> event (no credentials needed)
+	stopAdmin  = "mysqladmin" // mysqladmin shutdown with the options file
+	stopKill   = "kill"       // unresponsive: killed
+)
+
+// onStop, when set (tests), is told how each Source stopped and what mysqld
+// printed.
+var onStop func(path, output string)
 
 // StartSource runs Laragon's mysqld on its data folder, bound to a free
 // 127.0.0.1 port, and waits until root can log in with password. It
@@ -70,7 +86,7 @@ func StartSource(l *Laragon, password string) (*Source, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	s.cmd = exec.Command(filepath.Join(l.MySQLBin, "mysqld.exe"), serverArgs(l, port)...)
+	s.cmd = exec.Command(filepath.Join(l.MySQLBin, "mysqld.exe"), serverArgs(l, port, dir)...)
 	s.cmd.Stdout, s.cmd.Stderr = s.out, s.out
 	// Should a stray child still hold the output pipe, don't let Wait hang.
 	s.cmd.WaitDelay = 5 * time.Second
@@ -84,32 +100,43 @@ func StartSource(l *Laragon, password string) (*Source, error) {
 	deadline := time.Now().Add(startTimeout)
 	for {
 		_, err := s.query("SELECT 1")
-		if err == nil {
+		switch {
+		case err == nil:
 			return s, nil
-		}
-		if errors.Is(err, ErrPassword) {
-			s.Stop()
-			return nil, ErrPassword
+		case errors.Is(err, ErrPassword):
+			return nil, s.stopWith(ErrPassword)
+		case !errors.Is(err, errNotUp):
+			return nil, s.stopWith(fmt.Errorf("log in to Laragon's MySQL: %w", err))
 		}
 		select {
 		case <-s.exited:
-			s.Stop()
-			return nil, fmt.Errorf("Laragon's mysqld stopped while starting:\n%s", s.out.String())
+			return nil, s.stopWith(fmt.Errorf("Laragon's mysqld stopped while starting:\n%s", s.out.String()))
 		case <-time.After(500 * time.Millisecond):
 		}
 		if time.Now().After(deadline) {
-			s.Stop()
-			return nil, fmt.Errorf("Laragon's mysqld did not accept connections within %s: %v\n%s", startTimeout, err, s.out.String())
+			return nil, s.stopWith(fmt.Errorf("Laragon's mysqld did not accept connections within %s: %v\n%s", startTimeout, err, s.out.String()))
 		}
 	}
 }
 
-var mysqlMajor = regexp.MustCompile(`^mysql-(\d+)\.`)
+// stopWith stops the source after a failed start and returns err, joined
+// with Stop's own error when that fails too (err itself otherwise, so
+// err == ErrPassword still holds).
+func (s *Source) stopWith(err error) error {
+	if serr := s.Stop(); serr != nil {
+		return errors.Join(err, serr)
+	}
+	return err
+}
 
-// serverArgs are mysqld's options. MySQL 8+ also gets --mysqlx=OFF and
-// --no-monitor: on Windows it otherwise runs as a monitor process whose
+var mysqlVersion = regexp.MustCompile(`^mysql-(\d+)\.(\d+)\.(\d+)`)
+
+// serverArgs are mysqld's options; privateDir holds the pid file. The user's
+// events don't run and replication doesn't start, and as little as possible
+// is written into Laragon's data folder. MySQL 8+ also gets --mysqlx=OFF
+// and --no-monitor: on Windows it otherwise runs as a monitor process whose
 // child is the real server, and killing the monitor leaves the server up.
-func serverArgs(l *Laragon, port int) []string {
+func serverArgs(l *Laragon, port int, privateDir string) []string {
 	args := []string{
 		"--no-defaults",
 		"--basedir=" + filepath.Dir(l.MySQLBin),
@@ -118,48 +145,92 @@ func serverArgs(l *Laragon, port int) []string {
 		"--bind-address=127.0.0.1",
 		"--skip-log-bin",
 		"--console", // log to stderr, not a .err file in Laragon's data folder
+		"--pid-file=" + filepath.Join(privateDir, "mysqld.pid"),
+		"--event-scheduler=DISABLED",
+		"--innodb-buffer-pool-dump-at-shutdown=OFF",
+		"--innodb-buffer-pool-load-at-startup=OFF",
 	}
-	if m := mysqlMajor.FindStringSubmatch(strings.ToLower(l.MySQLVersion)); m != nil {
-		if major, _ := strconv.Atoi(m[1]); major >= 8 {
-			args = append(args, "--mysqlx=OFF", "--no-monitor")
+	v := [3]int{8, 4, 0} // unknown folder name: assume a current MySQL
+	if m := mysqlVersion.FindStringSubmatch(strings.ToLower(l.MySQLVersion)); m != nil {
+		for i := range v {
+			v[i], _ = strconv.Atoi(m[i+1])
 		}
+	}
+	if v[0] >= 8 {
+		args = append(args, "--mysqlx=OFF", "--no-monitor")
+	}
+	// skip-replica-start arrived in 8.0.26.
+	if v[0] > 8 || v[0] == 8 && (v[1] > 0 || v[2] >= 26) {
+		args = append(args, "--skip-replica-start")
+	} else {
+		args = append(args, "--skip-slave-start")
 	}
 	return args
 }
 
-// Stop shuts mysqld down cleanly, killing it if it is still running after
-// 20 seconds, and deletes the credentials file. Calling it again is a no-op.
+// Stop shuts mysqld down cleanly and deletes the credentials file. It
+// first signals mysqld's MYSQLShutdown<pid> event, which needs no password,
+// and falls back to mysqladmin shutdown. mysqld gets 120 seconds to finish;
+// only an unresponsive one is killed. Calling it again is a no-op.
 func (s *Source) Stop() error {
 	s.stopOnce.Do(func() {
-		defer os.RemoveAll(s.cnfDir)
-		select {
-		case <-s.exited:
-			return
-		default:
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
-		admin := s.tool(ctx, "mysqladmin.exe", "shutdown")
-		err := admin.Run()
-		cancel()
-		if err == nil {
-			select {
-			case <-s.exited:
-				return
-			case <-time.After(stopTimeout):
-			}
-		}
-		// The whole tree, in case mysqld started a child of its own.
-		tk := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(s.cmd.Process.Pid))
-		hide(tk)
-		tk.Run()
-		kerr := s.cmd.Process.Kill() // fails harmlessly when taskkill got it
-		select {
-		case <-s.exited:
-		case <-time.After(stopTimeout):
-			s.stopErr = fmt.Errorf("Laragon's mysqld (pid %d) did not exit: %v", s.cmd.Process.Pid, kerr)
+		path := s.stop()
+		os.RemoveAll(s.cnfDir)
+		if onStop != nil {
+			onStop(path, s.out.String())
 		}
 	})
 	return s.stopErr
+}
+
+func (s *Source) stop() string {
+	select {
+	case <-s.exited:
+		return stopExited
+	default:
+	}
+	path := stopEvent
+	err := requestShutdown(s.cmd.Process.Pid)
+	if err != nil {
+		path = stopAdmin
+		ctx, cancel := context.WithTimeout(context.Background(), adminTimeout)
+		err = s.tool(ctx, "mysqladmin.exe", "shutdown").Run()
+		cancel()
+	}
+	if err == nil {
+		select {
+		case <-s.exited:
+			return path
+		case <-time.After(shutdownWait):
+		}
+	}
+	// Unresponsive: kill the whole tree, in case mysqld started a child.
+	tk := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(s.cmd.Process.Pid))
+	hide(tk)
+	tk.Run()
+	kerr := s.cmd.Process.Kill() // fails harmlessly when taskkill got it
+	select {
+	case <-s.exited:
+	case <-time.After(killWait):
+		s.stopErr = fmt.Errorf("Laragon's mysqld (pid %d) did not exit: %v", s.cmd.Process.Pid, kerr)
+	}
+	return stopKill
+}
+
+// requestShutdown signals the named event mysqld on Windows creates for
+// itself (MYSQLShutdown<pid>, case-sensitive; with --no-monitor the pid is
+// the process we started); setting it makes the server shut down cleanly.
+func requestShutdown(pid int) error {
+	name, err := windows.UTF16PtrFromString("MYSQLShutdown" + strconv.Itoa(pid))
+	if err != nil {
+		return err
+	}
+	h, err := windows.OpenEvent(windows.EVENT_MODIFY_STATE, false, name)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(h)
+	return windows.SetEvent(h)
 }
 
 // tool builds a Laragon MySQL client command that reads its credentials
@@ -202,15 +273,28 @@ func runSQL(cmd *exec.Cmd, sql string) (string, error) {
 	return stdout.String(), nil
 }
 
+// errNotUp marks a client error that only means the server isn't
+// accepting connections yet.
+var errNotUp = errors.New("not accepting connections yet")
+
+var errorCode = regexp.MustCompile(`ERROR (\d+)`)
+
 // classify turns a MySQL client's error text into an error: ErrPassword
-// for an access-denied login, the text itself otherwise (nil when empty).
+// for an access-denied login; errNotUp (with the text) for can't-connect
+// (2002, 2003) and lost-during-handshake (2013); the text itself otherwise
+// (nil when empty).
 func classify(text string) error {
 	text = strings.TrimSpace(text)
-	switch {
-	case text == "":
+	if text == "" {
 		return nil
-	case strings.Contains(text, "ERROR 1045"):
-		return ErrPassword
+	}
+	if m := errorCode.FindStringSubmatch(text); m != nil {
+		switch m[1] {
+		case "1045":
+			return ErrPassword
+		case "2002", "2003", "2013":
+			return fmt.Errorf("%w: %s", errNotUp, text)
+		}
 	}
 	return errors.New(text)
 }

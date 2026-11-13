@@ -21,7 +21,7 @@ func TestFilterCollations(t *testing.T) {
 		"  `a` varchar(9) COLLATE utf8mb4_0900_as_ci NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_ci NOT NULL,",
 		"  `a` varchar(9) COLLATE utf8mb4_0900_as_cs NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_cs NOT NULL,",
 		"  `a` varchar(9) COLLATE utf8mb4_0900_bin NOT NULL,":                 "  `a` varchar(9) COLLATE utf8mb4_bin NOT NULL,",
-		"  `a` varchar(9) COLLATE utf8mb4_0900_ja_0900_as_cs NOT NULL,":       "  `a` varchar(9) COLLATE utf8mb4_uca1400_ai_ci NOT NULL,",
+		"  `a` varchar(9) COLLATE utf8mb4_ja_0900_as_cs NOT NULL,":            "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_cs NOT NULL,",
 		"  `a` varchar(9) COLLATE utf8mb4_unicode_ci NOT NULL,":               "  `a` varchar(9) COLLATE utf8mb4_unicode_ci NOT NULL,",
 	}
 	for in, want := range cases {
@@ -173,6 +173,34 @@ func TestFilterVersionedCommentLiteralProtected(t *testing.T) {
 func TestFilterDoubleQuotedStringProtected(t *testing.T) {
 	in := "SELECT \"utf8mb4_0900_bin \"\"q\"\"\" , utf8mb4_0900_bin;\n"
 	want := "SELECT \"utf8mb4_0900_bin \"\"q\"\"\" , utf8mb4_bin;\n"
+	if got := runFilter(t, in); got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+func TestFilterLanguageCollations(t *testing.T) {
+	cases := map[string]string{
+		"utf8mb4_ja_0900_as_cs":      "utf8mb4_uca1400_as_cs",
+		"utf8mb4_ja_0900_as_cs_ks":   "utf8mb4_uca1400_as_cs",
+		"utf8mb4_zh_0900_as_cs":      "utf8mb4_uca1400_as_cs",
+		"utf8mb4_de_pb_0900_ai_ci":   "utf8mb4_uca1400_ai_ci",
+		"utf8mb4_es_trad_0900_as_ci": "utf8mb4_uca1400_as_ci",
+		"utf8mb4_sr_latn_0900_ai_ci": "utf8mb4_uca1400_ai_ci",
+		"utf8mb4_ru_0900_as_cs":      "utf8mb4_uca1400_as_cs",
+	}
+	for in, want := range cases {
+		line := "  `a` varchar(9) COLLATE " + in + " NOT NULL,\n"
+		if got := runFilter(t, line); got != "  `a` varchar(9) COLLATE "+want+" NOT NULL,\n" {
+			t.Errorf("%s: got %q", in, got)
+		}
+		ins := "INSERT INTO `t` VALUES ('" + in + "');\n"
+		if got := runFilter(t, ins); got != ins {
+			t.Errorf("INSERT altered: %q", got)
+		}
+	}
+	// a quoted literal keeps the original name
+	in := "  `a` varchar(9) COLLATE utf8mb4_ja_0900_as_cs DEFAULT 'utf8mb4_ja_0900_as_cs',\n"
+	want := "  `a` varchar(9) COLLATE utf8mb4_uca1400_as_cs DEFAULT 'utf8mb4_ja_0900_as_cs',\n"
 	if got := runFilter(t, in); got != want {
 		t.Errorf("got %q want %q", got, want)
 	}

@@ -4,6 +4,7 @@ package laragon
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,9 +21,19 @@ func TestSourceWrongPassword(t *testing.T) {
 	if err := classify(denied); !errors.Is(err, ErrPassword) {
 		t.Errorf("classify(1045) = %v, want ErrPassword", err)
 	}
-	other := "ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1:3307' (10061)"
+	for _, notYet := range []string{
+		"ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1:3307' (10061)",
+		"ERROR 2002 (HY000): Can't connect to server on 'localhost' (10061)",
+		"ERROR 2013 (HY000): Lost connection to MySQL server at 'reading initial communication packet', system error: 0",
+	} {
+		err := classify(notYet)
+		if !errors.Is(err, errNotUp) || errors.Is(err, ErrPassword) || !strings.Contains(err.Error(), notYet) {
+			t.Errorf("classify(%q) = %v, want errNotUp with the text", notYet, err)
+		}
+	}
+	other := "ERROR 1130 (HY000): Host 'x' is not allowed to connect to this MySQL server"
 	err := classify(other)
-	if err == nil || errors.Is(err, ErrPassword) || !strings.Contains(err.Error(), other) {
+	if err == nil || errors.Is(err, ErrPassword) || errors.Is(err, errNotUp) || err.Error() != other {
 		t.Errorf("classify(other) = %v, want the text passed through", err)
 	}
 	if err := classify(""); err != nil {
@@ -32,11 +43,13 @@ func TestSourceWrongPassword(t *testing.T) {
 
 func TestMapCollation(t *testing.T) {
 	cases := map[string]string{
-		"utf8mb4_0900_ai_ci":         "utf8mb4_uca1400_ai_ci",
-		"utf8mb4_0900_bin":           "utf8mb4_bin",
-		"utf8mb4_0900_ja_0900_as_cs": "utf8mb4_uca1400_ai_ci",
-		"utf8mb4_unicode_ci":         "utf8mb4_unicode_ci",
-		"latin1_swedish_ci":          "latin1_swedish_ci",
+		"utf8mb4_0900_ai_ci":       "utf8mb4_uca1400_ai_ci",
+		"utf8mb4_0900_bin":         "utf8mb4_bin",
+		"utf8mb4_ja_0900_as_cs":    "utf8mb4_uca1400_as_cs",
+		"utf8mb4_de_pb_0900_ai_ci": "utf8mb4_uca1400_ai_ci",
+		"utf8mb4_0900_as_cs_x":     "utf8mb4_uca1400_ai_ci",
+		"utf8mb4_unicode_ci":       "utf8mb4_unicode_ci",
+		"latin1_swedish_ci":        "latin1_swedish_ci",
 	}
 	for in, want := range cases {
 		if got := mapCollation(in); got != want {
@@ -47,15 +60,41 @@ func TestMapCollation(t *testing.T) {
 
 func TestServerArgs(t *testing.T) {
 	l := &Laragon{MySQLVersion: "mysql-8.4.0-winx64", MySQLBin: `C:\l\bin\mysql\mysql-8.4.0-winx64\bin`, MySQLData: `C:\l\data\mysql-8.4`}
-	got := strings.Join(serverArgs(l, 4321), " ")
-	want := `--no-defaults --basedir=C:\l\bin\mysql\mysql-8.4.0-winx64 --datadir=C:\l\data\mysql-8.4 --port=4321 --bind-address=127.0.0.1 --skip-log-bin --console --mysqlx=OFF --no-monitor`
+	got := strings.Join(serverArgs(l, 4321, `C:\tmp\x`), " ")
+	want := `--no-defaults --basedir=C:\l\bin\mysql\mysql-8.4.0-winx64 --datadir=C:\l\data\mysql-8.4 --port=4321 --bind-address=127.0.0.1 ` +
+		`--skip-log-bin --console --pid-file=C:\tmp\x\mysqld.pid --event-scheduler=DISABLED ` +
+		`--innodb-buffer-pool-dump-at-shutdown=OFF --innodb-buffer-pool-load-at-startup=OFF ` +
+		`--mysqlx=OFF --no-monitor --skip-replica-start`
 	if got != want {
 		t.Errorf("8.4:\n got %s\nwant %s", got, want)
 	}
-	// MySQL 5.7 has neither X plugin switch nor monitor process.
-	l.MySQLVersion = "mysql-5.7.33-winx64"
-	if got := strings.Join(serverArgs(l, 4321), " "); strings.Contains(got, "mysqlx") || strings.Contains(got, "monitor") {
-		t.Errorf("5.7: %s", got)
+	// skip-replica-start arrived in 8.0.26 (skip-slave-start before);
+	// 5.7 has neither the X plugin switch nor a monitor process.
+	for v, replica := range map[string]string{
+		"mysql-8.0.30-winx64": "--skip-replica-start",
+		"mysql-8.0.25-winx64": "--skip-slave-start",
+		"mysql-5.7.33-winx64": "--skip-slave-start",
+	} {
+		l.MySQLVersion = v
+		args := serverArgs(l, 4321, `C:\tmp\x`)
+		got := strings.Join(args, " ")
+		if args[len(args)-1] != replica || strings.Count(got, "replica-start")+strings.Count(got, "slave-start") != 1 {
+			t.Errorf("%s: want %s last: %s", v, replica, got)
+		}
+		is57 := strings.HasPrefix(v, "mysql-5.")
+		if is57 == strings.Contains(got, "--mysqlx=OFF --no-monitor") {
+			t.Errorf("%s: mysqlx/no-monitor wrong: %s", v, got)
+		}
+		if !strings.Contains(got, "--event-scheduler=DISABLED") {
+			t.Errorf("%s: event scheduler not disabled: %s", v, got)
+		}
+	}
+}
+
+func TestShutdownEventMissing(t *testing.T) {
+	// No mysqld has this pid: the event can't be opened, so Stop falls back to mysqladmin.
+	if err := requestShutdown(0); err == nil {
+		t.Error("requestShutdown(0) succeeded")
 	}
 }
 
@@ -130,6 +169,28 @@ func itStart(t *testing.T, l *Laragon, password string) *Source {
 	return s
 }
 
+type stopSeen struct{ path, output string }
+
+// watchStops records how each Source stopped while the test runs.
+func watchStops(t *testing.T) *[]stopSeen {
+	var seen []stopSeen
+	onStop = func(path, output string) { seen = append(seen, stopSeen{path, output}) }
+	t.Cleanup(func() { onStop = nil })
+	return &seen
+}
+
+// assertGraceful checks a stop went through the shutdown event and mysqld
+// finished its own shutdown (no kill).
+func assertGraceful(t *testing.T, what string, st stopSeen) {
+	t.Helper()
+	if st.path != stopEvent {
+		t.Errorf("%s: stopped via %q, want %q", what, st.path, stopEvent)
+	}
+	if !strings.Contains(st.output, "Shutdown complete") {
+		t.Errorf("%s: mysqld did not report a complete shutdown:\n%s", what, st.output)
+	}
+}
+
 func TestSourcePasswordLive(t *testing.T) {
 	real, _ := itTarget(t)
 	l := itData(t, real)
@@ -138,12 +199,19 @@ func TestSourcePasswordLive(t *testing.T) {
 	if _, err := s.query("ALTER USER 'root'@'localhost' IDENTIFIED BY " + quoteString(pw) + ";"); err != nil {
 		t.Fatal(err)
 	}
-	// The options file still holds no password: shutdown is refused, so Stop kills.
+	// The options file still holds no password: Stop must not need it.
+	stops := watchStops(t)
 	if err := s.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if _, err := StartSource(l, ""); !errors.Is(err, ErrPassword) {
+	if _, err := StartSource(l, ""); err != ErrPassword {
 		t.Fatalf("StartSource without the password = %v, want ErrPassword", err)
+	}
+	if len(*stops) != 2 {
+		t.Fatalf("stops seen: %d, want 2", len(*stops))
+	}
+	for i, st := range *stops {
+		assertGraceful(t, fmt.Sprintf("stop %d", i+1), st)
 	}
 	s = itStart(t, l, pw)
 	if got, err := s.query("SELECT CURRENT_USER()"); err != nil || !strings.HasPrefix(got, "root@") {
@@ -184,6 +252,9 @@ func TestCopyRoundTrip(t *testing.T) {
 		"DELIMITER ;\n"
 	if _, err := s.query(setup); err != nil {
 		t.Fatalf("create source data: %v", err)
+	}
+	if got, err := s.query("SELECT @@event_scheduler"); err != nil || strings.TrimSpace(got) != "DISABLED" {
+		t.Errorf("source event_scheduler = %q %v, want DISABLED", got, err)
 	}
 
 	var log strings.Builder
@@ -291,16 +362,25 @@ func TestSourceStops(t *testing.T) {
 	if p := desktop.ProcessesUnder(l.MySQLBin); len(p) > 0 {
 		t.Skipf("something already runs from %s: %v", l.MySQLBin, p)
 	}
-	s := itSource(t, l)
+	data := itData(t, l)
+	s := itStart(t, data, "")
 	if len(desktop.ProcessesUnder(l.MySQLBin)) == 0 {
 		t.Fatal("no mysqld running after StartSource")
 	}
 	cnf := s.cnf
+	stops := watchStops(t)
 	if err := s.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	if err := s.Stop(); err != nil {
 		t.Fatalf("second Stop: %v", err)
+	}
+	if len(*stops) != 1 {
+		t.Fatalf("stops seen: %d, want 1", len(*stops))
+	}
+	assertGraceful(t, "Stop", (*stops)[0])
+	if pids, _ := filepath.Glob(filepath.Join(data.MySQLData, "*.pid")); len(pids) > 0 {
+		t.Errorf("pid file written into the data folder: %v", pids)
 	}
 	if p := desktop.ProcessesUnder(l.MySQLBin); len(p) > 0 {
 		t.Errorf("still running after Stop: %v", p)
