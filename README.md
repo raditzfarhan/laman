@@ -51,6 +51,11 @@ laman trust            # trusts laman's local CA so https://blog.test has no war
 ```
 
 - **Dashboard:** http://127.0.0.1:7171, or the tray icon. The **Light / Dark / Auto** switch at the bottom of its sidebar sets the look; Auto follows Windows.
+- **Site details:** click a site's name on Home to see what it runs on, drawn as a graph:
+  - **Services:** its PHP version (switchable there), database (MariaDB, PostgreSQL or SQLite), Redis and what it's used for, mail (Mailpit or another mailer), queue driver with waiting and failed jobs, and Node version with its package manager.
+  - **Packages and size:** whether `vendor` and `node_modules` exist, and how much disk the project and each of them take.
+  - **Where it comes from:** laman reads the project's own `.env` (Laravel, or `DATABASE_URL` / `REDIS_URL`) or `wp-config.php`, and never changes them.
+  - **Missing packages:** a missing `vendor` or `node_modules` gets a **composer install** / **npm install** button (or pnpm, yarn or bun, whichever the project uses).
 - **http://localhost:** lists every site, grouped by project folder, with a search box and a link to the dashboard. Mistyped `.test` names land here too. It uses the dashboard's theme and only this computer can open it.
 
 ## Project folders
