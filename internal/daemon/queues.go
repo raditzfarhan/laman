@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -54,21 +52,11 @@ type laravelEnv struct {
 	vals   map[string]string
 }
 
-var envLine = regexp.MustCompile(`(?m)^[ \t]*([A-Z_][A-Z0-9_]*)[ \t]*=[ \t]*(.*?)[ \t]*$`)
-
 // readLaravelEnv reads a site's .env; ok is false when it has none.
 func readLaravelEnv(dir string) (laravelEnv, bool) {
-	b, err := os.ReadFile(filepath.Join(dir, ".env"))
-	if err != nil {
+	vals, ok := readEnvFile(dir)
+	if !ok {
 		return laravelEnv{}, false
-	}
-	vals := map[string]string{}
-	for _, m := range envLine.FindAllStringSubmatch(strings.ReplaceAll(string(b), "\r\n", "\n"), -1) {
-		v := m[2]
-		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
-			v = v[1 : len(v)-1]
-		}
-		vals[m[1]] = v
 	}
 	if _, laravel := vals["APP_KEY"]; !laravel {
 		return laravelEnv{}, false
