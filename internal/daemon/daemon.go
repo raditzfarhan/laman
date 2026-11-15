@@ -126,7 +126,8 @@ type daemon struct {
 	devs       map[string]*devServer // Node dev servers by site host; guarded by mu
 	devRefresh bool                  // a refresh for a dev server change is queued; guarded by mu
 	quitOnce   sync.Once
-	updates    updater // laman's own newer release, if any
+	updates    updater   // laman's own newer release, if any
+	sizes      sizeCache // project folder sizes for the site detail page
 	// laragonFound: a Laragon install is at laragon.DefaultRoot, checked at
 	// each refresh so the status stays cheap. Guarded by mu.
 	laragonFound bool
