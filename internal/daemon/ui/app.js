@@ -187,6 +187,13 @@ function draw(force) {
     }
   }
   if (!(naming && document.activeElement?.classList.contains("fprefix")) && changed("folders", [status.folders, status.sites.map((s) => [s.path, s.app, s.linked, s.folder]), unfolding, picking, naming])) renderFolders();
+  if (currentView() === "site") {
+    const host = siteHost();
+    const qrows = (queues?.queues || []).filter((q) => q.site === host);
+    if (changed("site", [host, detail, detailErr, status.sites.find((x) => x.host === host), status.php, installed, shares, opening, copied, shareOpts,
+      status.shareDomain, status.editor, devShape.find((x) => x.host === host), devBusy[host], qrows, vers?.job, status.mailUrl, status.httpsTrusted, status.httpsPort, status.httpPort]))
+      renderSiteDetail(installed, shares, qrows);
+  }
   $("sites").hidden = ownSites.length === 0;
   $("nosites").hidden = ownSites.length > 0;
 
@@ -304,6 +311,13 @@ const LINE_ICONS = {
   code: "<path d=\"M7 8l-4 4l4 4\" /><path d=\"M17 8l4 4l-4 4\" /><path d=\"M14 4l-4 16\" />",
   open: "<path d=\"M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6\" /><path d=\"M11 13l9 -9\" /><path d=\"M15 4h5v5\" />",
   chevron: "<path d=\"M6 9l6 6l6 -6\" />",
+  globe: "<path d=\"M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0\" /><path d=\"M3.6 9h16.8\" /><path d=\"M3.6 15h16.8\" /><path d=\"M11.5 3a17 17 0 0 0 0 18\" /><path d=\"M12.5 3a17 17 0 0 1 0 18\" />",
+  shield: "<path d=\"M12 3a12 12 0 0 0 8.5 3a12 12 0 0 1 -8.5 15a12 12 0 0 1 -8.5 -15a12 12 0 0 0 8.5 -3\" />",
+  refresh: "<path d=\"M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4\" /><path d=\"M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4\" />",
+  database: "<path d=\"M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0\" /><path d=\"M4 6v6a8 3 0 0 0 16 0v-6\" /><path d=\"M4 12v6a8 3 0 0 0 16 0v-6\" />",
+  stack: "<path d=\"M12 4l-8 4l8 4l8 -4l-8 -4\" /><path d=\"M4 12l8 4l8 -4\" /><path d=\"M4 16l8 4l8 -4\" />",
+  box: "<path d=\"M12 3l8 4.5l0 9l-8 4.5l-8 -4.5l0 -9l8 -4.5\" /><path d=\"M12 12l8 -4.5\" /><path d=\"M12 12l0 9\" /><path d=\"M12 12l-8 -4.5\" />",
+  back: "<path d=\"M15 6l-6 6l6 6\" />",
   inbox: "<path d=\"M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z\" /><path d=\"M4 13h3l3 3h4l3 -3h3\" />",
 };
 const BRAND_ICONS = {
@@ -362,7 +376,7 @@ function siteRow(s, installed, shares) {
     const sh = shares.find((x) => x.host === s.host);
     return el("div", { class: "site" },
       el("div", { class: "who" },
-        el("a", { class: "host", href: url, target: "_blank", rel: "noopener" }, s.host),
+        el("a", { class: "host", href: siteHash(s.host), title: `${s.host}: details` }, s.host),
         s.linked ? el("span", { class: "tag" }, "linked") : null,
         el("span", { class: "path", title: s.root }, shortPath(tidy(s.path)))),
       sel,
@@ -429,7 +443,7 @@ function nodeRow(s, shares) {
   const asked = devAsk === s.name;
   return el("div", { class: "site node" + (asked || flashSite === s.name ? " flash" : ""), id: `site-${s.name}` },
     el("div", { class: "who" },
-      el("a", { class: "host", href: url, target: "_blank", rel: "noopener" }, s.host),
+      el("a", { class: "host", href: siteHash(s.host), title: `${s.host}: details` }, s.host),
       el("span", { class: "tag" }, s.framework || "Node"),
       el("span", { class: "path", title: s.path }, shortPath(tidy(s.path)))),
     el("span", { class: "devctl" },
@@ -477,7 +491,7 @@ function plainRow(s) {
   }
   return el("div", { class: "site" + (flashSite === s.name ? " flash" : ""), id: `site-${s.name}` },
     el("div", { class: "who" },
-      el("a", { class: "host", href: url, target: "_blank", rel: "noopener" }, s.host),
+      el("a", { class: "host", href: siteHash(s.host), title: `${s.host}: details` }, s.host),
       el("span", { class: "tag" }, tag),
       s.path ? el("span", { class: "path", title: s.path }, shortPath(tidy(s.path))) : null,
       sub),
@@ -490,6 +504,199 @@ async function loadDevOut() {
     try { devOut[host] = String(await api("GET", `/api/dev/log?site=${encodeURIComponent(host)}`)).replace(/^\s*\n|\s+$/g, ""); } catch { /* next poll */ }
   }
   render();
+}
+
+
+// ---- Site detail: #site/<host> ----
+// What one project runs on, drawn as a graph: the site card on the left,
+// a card per service on the right, joined by curves.
+let detail = null;       // GET /api/sites/detail for siteHost()
+let detailErr = "";      // why it couldn't be read (e.g. the site is gone)
+let detailTimer = 0;
+const siteHash = (host) => `#site/${encodeURIComponent(host)}`;
+const siteHost = () => (location.hash.startsWith("#site/") ? decodeURIComponent(location.hash.slice(6)) : "");
+
+async function loadDetail() {
+  clearTimeout(detailTimer);
+  const host = siteHost();
+  if (!host || currentView() !== "site") return;
+  try {
+    const d = await api("GET", `/api/sites/detail?site=${encodeURIComponent(host)}`);
+    if (host !== siteHost()) return;
+    detail = d;
+    detailErr = "";
+    if (d.facts.queue) loadQueues(); // renders itself
+  } catch (e) {
+    if (host !== siteHost()) return;
+    detail = null;
+    detailErr = e.message;
+  }
+  render();
+  detailTimer = setTimeout(loadDetail, detail?.size.state === "measuring" ? 1000 : 3000);
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}
+
+const DB_NAMES = { mariadb: "MariaDB", postgres: "PostgreSQL", sqlite: "SQLite" };
+const MAILERS = { log: "Written to the app's log", array: "Kept in memory (tests)", sendmail: "Sent with sendmail" };
+
+function serviceState(sf) {
+  const [cls, text] = sf.off ? ["", "Off"] : sf.running ? ["ok", "Running"] : ["warn", "Stopped"];
+  return el("span", { class: "sd-state" }, el("span", { class: `sd-dot ${cls}` }), text);
+}
+
+// The cards on the right, in the order the page shows them.
+function detailNodes(s, installed, qrows) {
+  const f = detail.facts, svc = detail.services, nodes = [];
+  if (s.kind === "php") {
+    const sel = el("select", { "aria-label": `PHP version for ${s.name}`, onchange: (e) => setSitePHP(s.name, e.target.value) },
+      el("option", { value: "", selected: !s.isolated }, `Default (PHP ${short(status.php)})`),
+      installed.map((v) => el("option", { value: v, selected: s.isolated && s.php === v }, `PHP ${short(v)}`)));
+    nodes.push({ tile: brandIcon("php"), title: "PHP", badge: short(s.php),
+      sub: [s.isolated ? "Pinned for this site" : "laman's default", s.phpFit ? phpFitAction(s.name, s.phpFit) : null], right: sel });
+  }
+  if (f.db) {
+    const db = f.db, sf = svc[db.kind];
+    const sub = db.kind === "sqlite" ? db.name
+      : db.local ? `database ${db.name} · :${db.port}`
+      : `External · ${db.host}:${db.port}${db.name ? ` · ${db.name}` : ""}`;
+    nodes.push({ tile: BRAND_ICONS[db.kind] ? brandIcon(db.kind) : icon("database"), title: DB_NAMES[db.kind] || db.kind,
+      badge: db.local && sf ? sf.version : "", sub, right: db.local && sf ? serviceState(sf) : null });
+  }
+  if (f.redis) {
+    const r = f.redis, roles = (r.roles || []).join(" · ");
+    nodes.push({ tile: brandIcon("redis"), title: "Redis", badge: r.local ? svc.redis.version : "",
+      sub: r.local ? [roles, `:${r.port}`].filter(Boolean).join(" · ") : `External · ${r.host}:${r.port}`,
+      right: r.local ? serviceState(svc.redis) : null });
+  }
+  if (f.mail) {
+    const m = f.mail;
+    nodes.push(m.mailpit
+      ? { tile: icon("inbox"), title: "Mailpit", sub: `Mail lands in the local inbox · SMTP :${m.port}`,
+        right: status.mailUrl ? el("a", { class: "btn", href: status.mailUrl, target: "_blank", rel: "noopener" }, "Inbox ↗") : serviceState(svc.mailpit) }
+      : { tile: icon("inbox"), title: "Mail", badge: m.mailer,
+        sub: m.mailer === "smtp" ? `SMTP ${m.host}:${m.port}` : MAILERS[m.mailer] || `${m.mailer} mailer` });
+  }
+  if (f.queue) {
+    const sum = (k) => qrows.reduce((n, q) => n + (q[k] || 0), 0);
+    const waiting = sum("waiting") + sum("delayed"), failed = sum("failed");
+    const sub = waiting || failed ? [`${waiting} waiting`, failed ? `${failed} failed` : ""].filter(Boolean).join(" · ") : "Nothing waiting";
+    nodes.push({ tile: icon("stack"), title: "Queue", badge: f.queue.driver, sub,
+      right: el("a", { class: "btn", href: "#queues" }, "Queues →") });
+  }
+  if (detail.node) {
+    const n = detail.node;
+    nodes.push({ tile: brandIcon("node"), title: "Node", badge: n.version, sub: n.from ? `${n.pm} · from ${n.from}` : n.pm });
+  }
+  const job = vers?.job || {};
+  const measured = detail.size.state === "done" || detail.size.at;
+  for (const p of detail.packages) {
+    const name = p.kind === "composer" ? "vendor" : "node_modules";
+    const pm = detail.node?.pm || "npm";
+    if (p.present) {
+      nodes.push({ tile: icon("box"), title: name,
+        sub: `${p.kind === "composer" ? "Composer packages" : `${pm} packages`} · ${measured ? fmtBytes(p.size) : "measuring…"}` });
+    } else {
+      const cmd = p.kind === "composer" ? "composer install" : `${pm} install`;
+      nodes.push({ tile: icon("box"), title: name, sub: "Not installed yet", missing: true,
+        right: el("button", { class: "primary", disabled: !!job.running, title: `Run ${cmd} in ${s.path}`,
+          onclick: () => act(() => api("POST", "/api/sites/install", { site: s.host, kind: p.kind })) }, cmd) });
+    }
+  }
+  return nodes;
+}
+
+function renderSiteDetail(installed, shares, qrows) {
+  const box = $("sitedetail"), host = siteHost();
+  const back = el("a", { class: "sd-back", href: "#home" }, icon("back"), "Sites");
+  if (!detail) {
+    box.replaceChildren(detailErr
+      ? el("div", { class: "view-head" }, el("div", {}, back, el("h1", { id: "site-title" }, host),
+        el("p", {}, /^no site/.test(detailErr) ? "This site no longer exists. Its folder may have been renamed or removed." : detailErr)))
+      : el("div", { class: "sd-gone" }, back, el("p", { class: "muted" }, "Loading…")));
+    return;
+  }
+  const s = status.sites.find((x) => x.host === host) || detail.site;
+  const url = siteURL(s.host);
+  const sh = shares.find((x) => x.host === s.host);
+  const dev = devOf(s.host);
+  const head = el("div", { class: "view-head" },
+    el("div", {}, back, el("h1", { id: "site-title" }, s.host), el("p", { class: "mono sd-path", title: s.path }, tidy(s.path))),
+    el("div", { class: "tools sd-tools" },
+      el("a", { class: "btn primary", href: url, target: "_blank", rel: "noopener" }, icon("open"), "Open site"),
+      rowEnds(s, false, shareGroup(s, sh, s.kind === "node" && dev.state !== "running"))));
+
+  const size = detail.size;
+  const sizeText = size.state === "done" || size.at ? fmtBytes(size.sizes.total) : "measuring…";
+  const p = detail.ports;
+  const web = p.https > 0 ? `${p.http} · SSL ${p.https}` : String(p.http);
+  const kindName = { php: "PHP site", static: "Static site", node: "Node app", proxy: "Proxy", group: "Group of projects", none: "Not a website" }[s.kind] || s.kind;
+  const framework = detail.facts.framework || s.framework;
+  let devBox = null;
+  if (s.kind === "node" && s.devCmd) {
+    const up = dev.state === "running" || dev.state === "starting";
+    devBox = el("div", { class: "sd-dev" },
+      el("span", { class: `devstate ${dev.state}` }, { running: `running · :${dev.port}`, starting: "starting…", crashed: "crashed", stopped: "stopped" }[dev.state] || dev.state),
+      el("button", { class: up ? "" : "primary", disabled: !!devBusy[s.host], title: up ? "Stop the dev server" : `Run ${s.devCmd}`,
+        onclick: () => devAction(s.host, up ? "/api/dev/stop" : "/api/dev/start") }, devBusy[s.host] ? "…" : up ? "Stop" : "Start"));
+  }
+  const card = el("section", { class: "sd-site", "aria-label": `${s.host} site` },
+    el("div", { class: "sd-site-top" },
+      el("div", { class: "sd-site-name" }, icon("globe"), s.host),
+      el("a", { class: "sd-url mono", href: url, target: "_blank", rel: "noopener" }, icon("shield"), url.replace(/\/$/, ""))),
+    el("div", { class: "sd-site-body" },
+      el("div", { class: "sd-tags" },
+        el("span", { class: "tag" }, framework || kindName),
+        framework ? el("span", { class: "tag" }, kindName) : null,
+        s.linked ? el("span", { class: "tag" }, "linked") : null),
+      el("div", { class: "sd-stats" },
+        el("div", {}, el("span", { class: "sd-k" }, "On disk"),
+          el("span", { class: "sd-v" }, sizeText,
+            el("button", { class: "icon", title: "Measure again", "aria-label": "Measure the folder again", disabled: size.state === "measuring",
+              onclick: () => act(() => api("POST", "/api/sites/sizes", { site: s.host })) }, icon("refresh")))),
+        el("div", {}, el("span", { class: "sd-k" }, "Web server"),
+          el("span", { class: "sd-v" }, el("span", { class: "sd-dot ok" }), web))),
+      devBox));
+
+  const nodes = detailNodes(s, installed, qrows);
+  const wires = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  wires.setAttribute("class", "sd-wires");
+  wires.setAttribute("aria-hidden", "true");
+  const graph = el("div", { class: "sd-graph" }, wires, card,
+    nodes.length
+      ? el("div", { class: "sd-nodes" }, nodes.map((n) => el("div", { class: "sd-node" + (n.missing ? " missing" : "") },
+        el("span", { class: "sd-tile" }, n.tile),
+        el("div", { class: "sd-text" },
+          el("div", { class: "sd-title" }, n.title, n.badge ? el("span", { class: "sd-badge" }, n.badge) : null),
+          el("div", { class: "sd-sub" }, n.sub)),
+        n.right ? el("div", { class: "sd-right" }, n.right) : null)))
+      : el("p", { class: "sd-empty" }, "Nothing else to show for this site."));
+  box.replaceChildren(head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph);
+  wireObs.disconnect();
+  wireObs.observe(graph);
+  drawWires();
+}
+
+// The curves from the dot on the site card to each service card.
+const wireObs = new ResizeObserver(() => drawWires());
+function drawWires() {
+  const g = document.querySelector(".sd-graph");
+  const svgEl = g?.querySelector(".sd-wires");
+  if (!svgEl || getComputedStyle(svgEl).display === "none") return;
+  const gr = g.getBoundingClientRect(), sr = g.querySelector(".sd-site").getBoundingClientRect();
+  const x0 = sr.right - gr.left, y0 = sr.top - gr.top + sr.height / 2;
+  const paths = [...g.querySelectorAll(".sd-node")].map((n) => {
+    const r = n.getBoundingClientRect();
+    const x1 = r.left - gr.left, y1 = r.top - gr.top + r.height / 2, dx = (x1 - x0) / 2;
+    return `<path${n.classList.contains("missing") ? ' class="miss"' : ""} d="M${x0} ${y0} C${x0 + dx} ${y0} ${x1 - dx} ${y1} ${x1} ${y1}"/>`;
+  });
+  svgEl.innerHTML = paths.length ? paths.join("") + `<circle cx="${x0}" cy="${y0}" r="4.5"/>` : "";
 }
 
 
@@ -1533,7 +1740,10 @@ function importSummary(tld) {
 // Views: one per rail entry, chosen by the URL hash so reloads keep it.
 // "import" has no rail entry: Home's Laragon note and Project folders link to it.
 const VIEWS = ["home", "folders", "apps", "queues", "versions", "extensions", "services", "logs", "import"];
-const currentView = () => (VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "home");
+const currentView = () => {
+  const h = location.hash.slice(1);
+  return h.startsWith("site/") ? "site" : VIEWS.includes(h) ? h : "home";
+};
 function showView() {
   const view = currentView();
   for (const sec of document.querySelectorAll(".view")) {
@@ -1541,14 +1751,19 @@ function showView() {
     if (on && sec.hidden) { sec.classList.remove("enter"); void sec.offsetWidth; sec.classList.add("enter"); }
     sec.hidden = !on;
   }
+  const navView = view === "site" ? "home" : view; // sites are listed on Home
   for (const a of document.querySelectorAll("#nav a")) {
-    if (a.dataset.view === view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    if (a.dataset.view === navView) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
   if (view === "logs") loadLog(true);
   if (view === "queues") loadQueues();
   if (view === "services") loadShareSetup();
   if (view === "folders") loadEditors();
   if (view === "import") openImport();
+  if (view === "site") {
+    if (detail?.site.host !== siteHost()) { detail = null; detailErr = ""; }
+    loadDetail();
+  }
   render();
 }
 window.addEventListener("hashchange", showView);

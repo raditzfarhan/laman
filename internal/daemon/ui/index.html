@@ -141,30 +141,30 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .site .open { color: var(--muted); text-decoration: none; font-size: 13px; padding: 5px 8px; border-radius: 7px; }
 .site .open:hover { color: var(--ink); background: var(--code); }
 /* Folder and editor: icon buttons beside Open */
-.site .ends { display: inline-flex; align-items: center; gap: 2px; justify-self: end; }
-.site .icon { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); }
-.site .icon:hover:not(:disabled) { color: var(--ink); background: var(--code); border-color: transparent; }
-.site .icon svg { width: 18px; height: 18px; }
-.site .icon.more { width: 18px; margin-left: -4px; }
-.site .icon.more svg { width: 14px; height: 14px; }
-.site .icon.on, .site .icon.on:disabled { color: var(--genting); opacity: 1; cursor: default; }
-.site .icon.busy svg { animation: spin .8s linear infinite; }
-.site .sharegrp { display: inline-flex; align-items: center; }
+.site .ends, .sd .ends { display: inline-flex; align-items: center; gap: 2px; justify-self: end; }
+.site .icon, .sd .icon { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); }
+.site .icon:hover:not(:disabled), .sd .icon:hover:not(:disabled) { color: var(--ink); background: var(--code); border-color: transparent; }
+.site .icon svg, .sd .icon svg { width: 18px; height: 18px; }
+.site .icon.more, .sd .icon.more { width: 18px; margin-left: -4px; }
+.site .icon.more svg, .sd .icon.more svg { width: 14px; height: 14px; }
+.site .icon.on, .site .icon.on:disabled, .sd .icon.on, .sd .icon.on:disabled { color: var(--genting); opacity: 1; cursor: default; }
+.site .icon.busy svg, .sd .icon.busy svg { animation: spin .8s linear infinite; }
+.site .sharegrp, .sd .sharegrp { display: inline-flex; align-items: center; }
 .site .phpfit, .impphp .phpfit { display: inline-flex; align-items: center; gap: 8px; color: var(--warn); font-size: 13px; }
 .site .fitmark, .impphp .fitmark { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--warn-bg); color: var(--warn); font-weight: 700; font-size: 12px; cursor: default; }
 .site .phpfit button.inline, .impphp .phpfit button.inline { padding: 3px 10px; font-size: 13px; background: var(--warn-bg); color: var(--warn); border-color: currentColor; }
-.site .sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
+.site .sep, .sd .sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
 .editor-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 0; }
 .editor-pick label { display: flex; align-items: center; gap: 10px; }
-.site .sharebtn { background: none; border-color: transparent; color: var(--muted); font-size: 13px; padding: 5px 8px; }
-.site .sharebtn:hover:not(:disabled) { color: var(--ink); background: var(--code); border-color: transparent; }
-.site .shared { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: -4px; padding: 8px 10px 8px 12px; border-radius: 8px; background: var(--code); font-size: 13px; }
-.site .shared .live { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink); }
-.site .shared .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--genting); }
-.site .shared a { font: 13px var(--mono); color: var(--ink); overflow-wrap: anywhere; min-width: 0; flex: 1 1 260px; }
-.site .shared .acts { display: flex; gap: 6px; margin-left: auto; }
-.site .shared button { padding: 3px 10px; font-size: 13px; }
-.site .shared .why { color: var(--muted); flex-basis: 100%; }
+.site .sharebtn, .sd .sharebtn { background: none; border-color: transparent; color: var(--muted); font-size: 13px; padding: 5px 8px; }
+.site .sharebtn:hover:not(:disabled), .sd .sharebtn:hover:not(:disabled) { color: var(--ink); background: var(--code); border-color: transparent; }
+.site .shared, .sd .shared { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: -4px; padding: 8px 10px 8px 12px; border-radius: 8px; background: var(--code); font-size: 13px; }
+.site .shared .live, .sd .shared .live { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink); }
+.site .shared .live::before, .sd .shared .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--genting); }
+.site .shared a, .sd .shared a { font: 13px var(--mono); color: var(--ink); overflow-wrap: anywhere; min-width: 0; flex: 1 1 260px; }
+.site .shared .acts, .sd .shared .acts { display: flex; gap: 6px; margin-left: auto; }
+.site .shared button, .sd .shared button { padding: 3px 10px; font-size: 13px; }
+.site .shared .why, .sd .shared .why { color: var(--muted); flex-basis: 100%; }
 /* Node apps: dev server state, Start/Stop, output */
 .devctl { display: flex; align-items: center; gap: 10px; }
 .devctl button:not(.linkish) { padding: 4px 12px; font-size: 13px; min-width: 64px; }
@@ -194,6 +194,59 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .grp .gname { font-weight: 650; }
 .grp .gpath { font-size: 12px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grp .gcount { margin-left: auto; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* ---- Site detail: #site/<host>, a graph of what the project runs on ---- */
+.sd-back { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); text-decoration: none; font-size: 13px; margin-bottom: 6px; }
+.sd-back:hover { color: var(--ink); }
+.sd-back svg { width: 14px; height: 14px; }
+.sd-path { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.sd-tools .btn.primary { display: inline-flex; align-items: center; gap: 7px; text-decoration: none; padding: 6px 14px; font-weight: 600; }
+.sd-tools .btn.primary svg { width: 16px; height: 16px; }
+.sd .shared { margin: 0 0 18px; }
+.sd-graph { position: relative; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 460px); column-gap: 120px; align-items: center; padding: 8px 0 24px; }
+.sd-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.sd-wires path { fill: none; stroke: var(--ok); stroke-opacity: .55; stroke-width: 1.6; }
+.sd-wires path.miss { stroke: var(--off); stroke-opacity: 1; stroke-dasharray: 5 5; }
+.sd-wires circle { fill: var(--ok); }
+.sd-site, .sd-node { position: relative; background: var(--panel); border: 1px solid var(--line-strong); }
+.sd-site { border-radius: 14px; overflow: hidden; }
+.sd-site-top { padding: 16px 18px; display: grid; gap: 6px; }
+.sd-site-name { display: flex; align-items: center; gap: 9px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.sd-site-name svg { width: 20px; height: 20px; flex: none; }
+.sd-url { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); text-decoration: none; font-size: 13px; overflow-wrap: anywhere; }
+.sd-url svg { width: 15px; height: 15px; flex: none; }
+.sd-url:hover { text-decoration: underline; }
+.sd-site-body { border-top: 1px solid var(--line); padding: 14px 18px 16px; display: grid; gap: 12px; }
+.sd-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.sd-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.sd-k { display: block; color: var(--muted); font-size: 12px; }
+.sd-v { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.sd-v .icon { width: 24px; height: 24px; }
+.sd-v .icon svg { width: 14px; height: 14px; }
+.sd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--off); flex: none; }
+.sd-dot.ok { background: var(--ok); }
+.sd-dot.warn { background: var(--warn); }
+.sd-dev { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sd-nodes { display: grid; gap: 12px; }
+.sd-node { display: flex; align-items: center; gap: 14px; min-height: 64px; padding: 10px 14px; border-radius: 12px; }
+.sd-node.missing { background: transparent; border-style: dashed; }
+.sd-tile { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 9px; border: 1px solid var(--line); background: var(--code); }
+.sd-tile svg { width: 22px; height: 22px; }
+.sd-node.missing .sd-tile { color: var(--muted); }
+.sd-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.sd-title { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 15px; }
+.sd-badge { font: 11px var(--mono); padding: 1px 7px; border-radius: 999px; background: var(--code); border: 1px solid var(--line); font-weight: 400; }
+.sd-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-sub .phpfit { margin-top: 4px; }
+.sd-right { flex: none; display: flex; align-items: center; gap: 8px; }
+.sd-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.sd-right a.btn { text-decoration: none; font-size: 13px; font-weight: 600; padding: 5px 10px; }
+.sd-right button { font-size: 13px; padding: 5px 12px; }
+.sd-empty { color: var(--muted); }
+.sd-gone { padding: 40px 0; display: grid; gap: 10px; justify-items: start; }
+@media (max-width: 860px) {
+  .sd-graph { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
+  .sd-wires { display: none; }
+}
 @media (prefers-reduced-motion: reduce) { .grp .chev { transition: none; } }
 .empty-state code { color: var(--ink); }
 
@@ -335,11 +388,11 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .sharing .step { display: flex; align-items: center; gap: 10px; font-weight: 600; }
 .sharing .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--genting); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.site .sharegrp { display: inline-flex; align-items: center; }
-.site .sharebtn.more { padding: 5px 6px; margin-left: -4px; font-size: 11px; }
-.site .shared.opts .aslabel { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.site .sharegrp, .sd .sharegrp { display: inline-flex; align-items: center; }
+.site .sharebtn.more, .sd .sharebtn.more { padding: 5px 6px; margin-left: -4px; font-size: 11px; }
+.site .shared.opts .aslabel, .sd .shared.opts .aslabel { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
 .site .asname { font: 13px var(--mono); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; padding: 3px 8px; width: 140px; }
-.site .shared .preview { color: var(--muted); font-size: 12px; flex: 1 1 200px; overflow-wrap: anywhere; }
+.site .shared .preview, .sd .shared .preview { color: var(--muted); font-size: 12px; flex: 1 1 200px; overflow-wrap: anywhere; }
 
 /* ---- Queues ---- */
 .queue { padding: 14px 18px; border-bottom: 1px solid var(--line); }
@@ -706,6 +759,10 @@ body.down .view, body.down .notes { display: none; }
       </div>
       <div class="sect-head spaced"><h2 id="sharing-title">Sharing</h2><span class="hint">Where <span class="mono">laman share</span> puts your sites</span></div>
       <div class="panel pad sharing" id="sharing" aria-labelledby="sharing-title"></div>
+    </section>
+
+    <section class="view sd" data-view="site" hidden aria-labelledby="site-title">
+      <div id="sitedetail"></div>
     </section>
 
     <section class="view" data-view="logs" hidden aria-labelledby="logs-title">
