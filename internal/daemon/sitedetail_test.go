@@ -87,3 +87,29 @@ func TestDetailSizesRefresh(t *testing.T) {
 		t.Errorf("refresh gone: status %d, want 404", rec.Code)
 	}
 }
+
+func TestInstallBusy(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "package.json", "{}")
+	d, mux := detailFixture(t, sites.Site{Name: "acme", Host: "acme.test", Path: dir, Kind: sites.KindPHP})
+	d.installJob.running = true
+	rec := call(mux, "POST", "/api/sites/install", `{"site":"acme.test","kind":"node"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "another install is still running") {
+		t.Errorf("status %d %q, want 409 busy", rec.Code, rec.Body)
+	}
+}
+
+func TestInstallBadKind(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "package.json", "{}")
+	_, mux := detailFixture(t, sites.Site{Name: "acme", Host: "acme.test", Path: dir, Kind: sites.KindPHP})
+	for body, want := range map[string]int{
+		`{"site":"acme.test","kind":"pip"}`:      http.StatusBadRequest,
+		`{"site":"acme.test","kind":"composer"}`: http.StatusBadRequest, // no composer.json
+		`{"site":"gone.test","kind":"node"}`:     http.StatusNotFound,
+	} {
+		if rec := call(mux, "POST", "/api/sites/install", body); rec.Code != want {
+			t.Errorf("%s: status %d, want %d", body, rec.Code, want)
+		}
+	}
+}

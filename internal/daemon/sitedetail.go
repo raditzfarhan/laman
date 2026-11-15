@@ -1,10 +1,14 @@
 package daemon
 
 import (
+	"errors"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 
 	"laman/internal/config"
+	"laman/internal/install"
 	"laman/internal/sites"
 )
 
@@ -108,6 +112,7 @@ func (d *daemon) forgetGoneSizes() {
 }
 
 func (d *daemon) siteDetailRoutes(mux *http.ServeMux) {
+	d.siteInstallRoutes(mux)
 	mux.HandleFunc("GET /api/sites/detail", func(w http.ResponseWriter, r *http.Request) {
 		host := r.URL.Query().Get("site")
 		s, ok := d.siteByHost(host)
@@ -133,5 +138,63 @@ func (d *daemon) siteDetailRoutes(mux *http.ServeMux) {
 		writeJSON(w, struct {
 			OK bool `json:"ok"`
 		}{true})
+	})
+}
+
+// installCmd builds the command that installs a project's missing
+// packages: Composer through laman (the site's PHP), or the project's own
+// Node package manager with the project's Node first on PATH.
+func installCmd(s sites.Site, kind string) (cmd *exec.Cmd, title string, err error) {
+	switch kind {
+	case "composer":
+		if !exists(filepath.Join(s.Path, "composer.json")) {
+			return nil, "", errors.New(s.Host + " has no composer.json")
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, "", err
+		}
+		cmd = exec.Command(exe, "composer", "install", "--no-interaction")
+		title = "Installing Composer packages for " + s.Host
+	case "node":
+		if !exists(filepath.Join(s.Path, "package.json")) {
+			return nil, "", errors.New(s.Host + " has no package.json")
+		}
+		pm := sites.PackageManager(s.Path)
+		if pm == "bun" && !install.HaveBun() {
+			return nil, "", errors.New("bun is not installed; run laman install bun")
+		}
+		cmd = shellCmd(pm + " install")
+		cmd.Env = devEnv(s.Path, 0)
+		title = "Installing node_modules for " + s.Host
+	default:
+		return nil, "", errors.New("unknown package kind " + kind)
+	}
+	cmd.Dir = s.Path
+	return cmd, title, nil
+}
+
+func (d *daemon) siteInstallRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/sites/install", func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Site, Kind string }
+		if err := readJSON(r, &req); err != nil {
+			fail(w, http.StatusBadRequest, "bad request: %v", err)
+			return
+		}
+		s, ok := d.siteByHost(req.Site)
+		if !ok {
+			fail(w, http.StatusNotFound, "no site %s", req.Site)
+			return
+		}
+		cmd, title, err := installCmd(s, req.Kind)
+		if err != nil {
+			fail(w, http.StatusBadRequest, "%v", err)
+			return
+		}
+		if err := d.runJobCmd(title, cmd, func() { d.sizes.refresh(s.Path) }); err != nil {
+			fail(w, http.StatusConflict, "%v", err)
+			return
+		}
+		writeJSON(w, d.installJob.state())
 	})
 }

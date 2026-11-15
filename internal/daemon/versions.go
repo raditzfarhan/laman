@@ -235,6 +235,26 @@ func (d *daemon) runJobEnv(title string, args, env []string, after func()) error
 // runJobStart is runJobEnv with a before hook, run under the job lock once
 // the job is accepted (marked running) and never when it is refused as busy.
 func (d *daemon) runJobStart(title string, args, env []string, before, after func()) error {
+	return d.runJobWith(title, before, after, func() (*exec.Cmd, error) {
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		cmd := exec.Command(exe, args...)
+		if len(env) > 0 {
+			cmd.Env = append(os.Environ(), env...)
+		}
+		return cmd, nil
+	})
+}
+
+// runJobCmd runs a ready-made command as the dashboard's job (one at a
+// time), for work that isn't a laman subcommand or needs its own folder.
+func (d *daemon) runJobCmd(title string, cmd *exec.Cmd, after func()) error {
+	return d.runJobWith(title, nil, after, func() (*exec.Cmd, error) { return cmd, nil })
+}
+
+func (d *daemon) runJobWith(title string, before, after func(), build func() (*exec.Cmd, error)) error {
 	j := &d.installJob
 	j.mu.Lock()
 	if j.running {
@@ -247,14 +267,14 @@ func (d *daemon) runJobStart(title string, args, env []string, before, after fun
 	}
 	j.mu.Unlock()
 	go func() {
-		exe, err := os.Executable()
+		cmd, err := build()
 		var out []byte
+		what := title
 		if err == nil {
-			cmd := exec.Command(exe, args...)
-			if len(env) > 0 {
-				cmd.Env = append(os.Environ(), env...)
+			what = strings.Join(cmd.Args, " ")
+			if cmd.SysProcAttr == nil { // shellCmd brings its own
+				noWindow(cmd)
 			}
-			noWindow(cmd)
 			out, err = cmd.CombinedOutput()
 		}
 		last := lastLine(string(out))
@@ -265,7 +285,7 @@ func (d *daemon) runJobStart(title string, args, env []string, before, after fun
 			if j.err == "" {
 				j.err = err.Error()
 			}
-			logf("dashboard: laman %s failed: %v: %s", strings.Join(args, " "), err, last)
+			logf("dashboard: %s failed: %v: %s", what, err, last)
 		} else {
 			// The CLI's closing lines are terminal hints; here the lists
 			// update by themselves, so just say what happened.
