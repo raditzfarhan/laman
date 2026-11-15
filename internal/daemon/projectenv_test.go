@@ -129,3 +129,53 @@ func TestFactsLocalButOtherPort(t *testing.T) {
 		t.Errorf("Redis = %+v, want external on 6380", f.Redis)
 	}
 }
+
+func TestReadProjectFacts(t *testing.T) {
+	laravelEnv := "APP_KEY=base64:x\nDB_CONNECTION=mysql\nDB_DATABASE=acme\n"
+	cases := []struct {
+		name      string
+		files     map[string]string
+		framework string
+		db        *dbFact
+		redis     *redisFact
+	}{
+		{name: "laravel with lock", files: map[string]string{".env": laravelEnv,
+			"composer.lock": `{"packages":[{"name":"acme/x","version":"1.0.0"},{"name":"laravel/framework","version":"v12.3.0"}]}`},
+			framework: "Laravel 12", db: &dbFact{Kind: "mariadb", Name: "acme", Host: "127.0.0.1", Port: 3306, Local: true}},
+		{name: "laravel without lock", files: map[string]string{".env": laravelEnv},
+			framework: "Laravel", db: &dbFact{Kind: "mariadb", Name: "acme", Host: "127.0.0.1", Port: 3306, Local: true}},
+		{name: "artisan only", files: map[string]string{"artisan": "<?php"}, framework: "Laravel"},
+		{name: "wordpress", files: map[string]string{"wp-config.php": "<?php\ndefine( 'DB_NAME', \"blog\" );\ndefine('DB_HOST', 'localhost:3307');\n"},
+			framework: "WordPress", db: &dbFact{Kind: "mariadb", Name: "blog", Host: "localhost", Port: 3307}},
+		{name: "database url", files: map[string]string{".env": "DATABASE_URL=postgresql://postgres@127.0.0.1:5432/shop\nREDIS_URL=redis://127.0.0.1:6379\n"},
+			db:    &dbFact{Kind: "postgres", Name: "shop", Host: "127.0.0.1", Port: 5432, Local: true},
+			redis: &redisFact{Host: "127.0.0.1", Port: 6379, Local: true}},
+		{name: "sqlite url", files: map[string]string{".env": "DATABASE_URL=file:./dev.db\n"},
+			db: &dbFact{Kind: "sqlite", Name: "./dev.db", Local: true}},
+		{name: "empty"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for n, b := range c.files {
+				writeFile(t, dir, n, b)
+			}
+			f := readProjectFacts(dir, testPorts)
+			if f.Framework != c.framework {
+				t.Errorf("Framework = %q, want %q", f.Framework, c.framework)
+			}
+			if !reflect.DeepEqual(f.DB, c.db) {
+				t.Errorf("DB = %+v, want %+v", f.DB, c.db)
+			}
+			if !reflect.DeepEqual(f.Redis, c.redis) {
+				t.Errorf("Redis = %+v, want %+v", f.Redis, c.redis)
+			}
+			if c.name == "empty" && !reflect.DeepEqual(f, projectFacts{}) {
+				t.Errorf("facts = %+v, want zero", f)
+			}
+			if (c.name == "wordpress" || c.name == "database url") && (f.Mail != nil || f.Queue != nil) {
+				t.Errorf("Mail/Queue set for a non-Laravel project: %+v %+v", f.Mail, f.Queue)
+			}
+		})
+	}
+}

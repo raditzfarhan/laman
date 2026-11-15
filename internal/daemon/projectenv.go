@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -148,4 +150,107 @@ func laravelFacts(vals map[string]string, dir string, p localPorts) projectFacts
 	}
 	f.Queue = &queueFact{Driver: queue}
 	return f
+}
+
+var wpDefine = regexp.MustCompile(`define\(\s*['"](DB_NAME|DB_HOST)['"]\s*,\s*['"]([^'"]*)['"]\s*\)`)
+
+// readProjectFacts works out what the project in dir uses: Laravel from its
+// .env, WordPress from wp-config.php, anything else from DATABASE_URL and
+// REDIS_URL. A project with none of these gives zero facts.
+func readProjectFacts(dir string, p localPorts) projectFacts {
+	vals, haveEnv := readEnvFile(dir)
+	if _, key := vals["APP_KEY"]; key || exists(filepath.Join(dir, "artisan")) {
+		f := laravelFacts(vals, dir, p)
+		if major := laravelMajor(dir); major != "" {
+			f.Framework = "Laravel " + major
+		}
+		return f
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "wp-config.php")); err == nil {
+		db := &dbFact{Kind: "mariadb", Host: "localhost", Port: 3306}
+		for _, m := range wpDefine.FindAllStringSubmatch(string(b), -1) {
+			if m[1] == "DB_NAME" {
+				db.Name = m[2]
+			} else {
+				db.Host = m[2]
+				if h, port, ok := strings.Cut(m[2], ":"); ok {
+					db.Host = h
+					if n, err := strconv.Atoi(port); err == nil {
+						db.Port = n
+					}
+				}
+			}
+		}
+		db.Local = isLoopback(db.Host) && db.Port == p.MySQL
+		return projectFacts{Framework: "WordPress", DB: db}
+	}
+	if !haveEnv {
+		return projectFacts{}
+	}
+	var f projectFacts
+	if raw := vals["DATABASE_URL"]; raw != "" {
+		f.DB = dbFromURL(raw, p)
+	}
+	if raw := vals["REDIS_URL"]; raw != "" {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			port, _ := strconv.Atoi(u.Port())
+			if port == 0 {
+				port = 6379
+			}
+			f.Redis = &redisFact{Host: u.Hostname(), Port: port, Local: isLoopback(u.Hostname()) && port == p.Redis}
+		}
+	}
+	return f
+}
+
+func dbFromURL(raw string, p localPorts) *dbFact {
+	scheme, rest, ok := strings.Cut(raw, ":")
+	if !ok {
+		return nil
+	}
+	switch strings.ToLower(scheme) {
+	case "file", "sqlite":
+		return &dbFact{Kind: "sqlite", Name: strings.TrimPrefix(rest, "//"), Local: true}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil
+	}
+	kind, own, def := strings.ToLower(u.Scheme), 0, 0
+	switch kind {
+	case "mysql", "mariadb":
+		kind, own, def = "mariadb", p.MySQL, 3306
+	case "postgres", "postgresql":
+		kind, own, def = "postgres", p.Postgres, 5432
+	}
+	port, _ := strconv.Atoi(u.Port())
+	if port == 0 {
+		port = def
+	}
+	return &dbFact{Kind: kind, Name: strings.TrimPrefix(u.Path, "/"), Host: u.Hostname(), Port: port,
+		Local: own != 0 && isLoopback(u.Hostname()) && port == own}
+}
+
+// laravelMajor is laravel/framework's major version from composer.lock
+// ("12" for v12.3.0), or "".
+func laravelMajor(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "composer.lock"))
+	if err != nil {
+		return ""
+	}
+	var lock struct {
+		Packages []struct{ Name, Version string } `json:"packages"`
+	}
+	if json.Unmarshal(b, &lock) != nil {
+		return ""
+	}
+	for _, pkg := range lock.Packages {
+		if pkg.Name == "laravel/framework" {
+			major, _, _ := strings.Cut(strings.TrimPrefix(pkg.Version, "v"), ".")
+			if _, err := strconv.Atoi(major); err == nil {
+				return major
+			}
+		}
+	}
+	return ""
 }
