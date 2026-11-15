@@ -15,6 +15,10 @@ type dirSizes struct {
 	Total       int64 `json:"total"`
 	Vendor      int64 `json:"vendor"`      // the top-level vendor folder
 	NodeModules int64 `json:"nodeModules"` // the top-level node_modules folder
+	// Whether those folders existed when measured, to notice an install
+	// done outside the dashboard.
+	HasVendor      bool `json:"-"`
+	HasNodeModules bool `json:"-"`
 }
 
 type sizeState struct {
@@ -27,9 +31,9 @@ type sizeState struct {
 // followed (pnpm's node_modules is full of them, and they can loop), and
 // files that can't be read are skipped.
 func measureDir(root string) (dirSizes, error) {
-	var s dirSizes
 	vendor := filepath.Join(root, "vendor") + string(filepath.Separator)
 	nodeModules := filepath.Join(root, "node_modules") + string(filepath.Separator)
+	s := dirSizes{HasVendor: exists(vendor), HasNodeModules: exists(nodeModules)}
 	err := filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
 		if err != nil {
 			if e != nil && e.IsDir() && p != root {

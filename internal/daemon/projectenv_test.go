@@ -31,6 +31,7 @@ func TestReadEnvFileForms(t *testing.T) {
 		"DB_DATABASE=acme # main db",
 		`APP_NAME="Acme # Shop"`,
 		"MAIL_HOST='127.0.0.1'",
+		`APP_URL="Bob \"the\" Shop"`,
 		"# COMMENTED=1",
 	}, "\r\n")+"\r\n")
 	vals, ok := readEnvFile(dir)
@@ -39,6 +40,7 @@ func TestReadEnvFileForms(t *testing.T) {
 	}
 	for k, want := range map[string]string{
 		"DB_HOST": "127.0.0.1", "DB_DATABASE": "acme", "APP_NAME": "Acme # Shop", "MAIL_HOST": "127.0.0.1",
+		"APP_URL": `Bob \"the\" Shop`, // escaped quotes kept, as before
 	} {
 		if vals[k] != want {
 			t.Errorf("%s = %q, want %q", k, vals[k], want)
@@ -84,8 +86,8 @@ func TestLaravelFacts(t *testing.T) {
 		{name: "old cache key", env: "CACHE_DRIVER=redis",
 			redis: &redisFact{Host: "127.0.0.1", Port: 6379, Local: true, Roles: []string{"cache"}}},
 		{name: "no redis", env: "CACHE_STORE=file"},
-		{name: "redis host only", env: "REDIS_HOST=127.0.0.1",
-			redis: &redisFact{Host: "127.0.0.1", Port: 6379, Local: true}},
+		// Laravel's stock .env sets REDIS_HOST even when nothing uses Redis.
+		{name: "redis host only", env: "REDIS_HOST=127.0.0.1 REDIS_CLIENT=phpredis CACHE_STORE=database"},
 		{name: "mailpit", env: "MAIL_MAILER=smtp MAIL_HOST=127.0.0.1 MAIL_PORT=1025",
 			mail: &mailFact{Mailer: "smtp", Host: "127.0.0.1", Port: 1025, Mailpit: true}},
 		{name: "log mailer", env: "MAIL_MAILER=log", mail: &mailFact{Mailer: "log"}},

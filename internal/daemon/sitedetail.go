@@ -82,6 +82,21 @@ func (d *daemon) siteDetail(s sites.Site) siteDetail {
 	if r.Node != nil {
 		r.Packages = append(r.Packages, packageFact{Kind: "node", Present: exists(filepath.Join(s.Path, "node_modules")), Size: r.Size.Sizes.NodeModules})
 	}
+	// A package folder appeared or went since the last measurement (e.g.
+	// `npm install` in a terminal): measure again rather than show old sizes.
+	if r.Size.State == "done" {
+		for _, p := range r.Packages {
+			was := r.Size.Sizes.HasVendor
+			if p.Kind == "node" {
+				was = r.Size.Sizes.HasNodeModules
+			}
+			if p.Present != was {
+				d.sizes.refresh(s.Path)
+				r.Size.State = "measuring"
+				break
+			}
+		}
+	}
 	d.mu.Lock()
 	running := func(kind string) bool { return d.handles[kind] != nil }
 	r.Services = map[string]serviceFact{

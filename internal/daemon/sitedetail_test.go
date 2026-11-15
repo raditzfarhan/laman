@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"laman/internal/config"
 	"laman/internal/sites"
@@ -111,5 +112,33 @@ func TestInstallBadKind(t *testing.T) {
 		if rec := call(mux, "POST", "/api/sites/install", body); rec.Code != want {
 			t.Errorf("%s: status %d, want %d", body, rec.Code, want)
 		}
+	}
+}
+
+// A package installed outside the dashboard (in a terminal) is measured
+// again instead of showing the old 0 B.
+func TestDetailRemeasuresWhenPackagesAppear(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "package.json", "{}")
+	d, mux := detailFixture(t, sites.Site{Name: "acme", Host: "acme.test", Path: dir, Kind: sites.KindNode})
+	d.sizes.get(dir)
+	deadline := time.Now().Add(2 * time.Second)
+	for d.sizes.get(dir).State != "done" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	writeFile(t, dir, "node_modules/x/index.js", "module.exports = 1")
+	var got siteDetail
+	json.Unmarshal(call(mux, "GET", "/api/sites/detail?site=acme.test", "").Body.Bytes(), &got)
+	if got.Size.State != "measuring" {
+		t.Errorf("size.state = %q after node_modules appeared, want measuring", got.Size.State)
+	}
+}
+
+// A failed composer install ends with a generic hint; the job shows the
+// line that says what went wrong.
+func TestLastLineSkipsComposerHint(t *testing.T) {
+	out := "Loading composer repositories\r\n  Problem 1\r\n    - Root composer.json requires acme/nope, it could not be found in any version.\r\n\r\nPotential causes:\r\n - A typo in the package name\r\n - It's a private package and you forgot to add a custom repository to find it\r\n\r\nRead <https://getcomposer.org/doc/articles/troubleshooting.md> for further common problems.\r\n"
+	if got, want := lastLine(out), "- Root composer.json requires acme/nope, it could not be found in any version."; got != want {
+		t.Errorf("lastLine = %q, want %q", got, want)
 	}
 }

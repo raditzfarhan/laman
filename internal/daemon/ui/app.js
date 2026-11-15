@@ -514,12 +514,17 @@ let detail = null;       // GET /api/sites/detail for siteHost()
 let detailErr = "";      // why it couldn't be read (e.g. the site is gone)
 let detailTimer = 0;
 const siteHash = (host) => `#site/${encodeURIComponent(host)}`;
-const siteHost = () => (location.hash.startsWith("#site/") ? decodeURIComponent(location.hash.slice(6)) : "");
+const siteHost = () => {
+  if (!location.hash.startsWith("#site/")) return "";
+  try { return decodeURIComponent(location.hash.slice(6)); } catch { return ""; } // a mistyped link, e.g. #site/50%
+};
+let siteJobHost = ""; // site whose Install button started the current job
 
 async function loadDetail() {
   clearTimeout(detailTimer);
   const host = siteHost();
-  if (!host || currentView() !== "site") return;
+  if (currentView() !== "site") return;
+  if (!host) { detail = null; detailErr = "no site"; render(); return; } // #site/ with a bad name
   try {
     const d = await api("GET", `/api/sites/detail?site=${encodeURIComponent(host)}`);
     if (host !== siteHost()) return;
@@ -605,8 +610,8 @@ function detailNodes(s, installed, qrows) {
     } else {
       const cmd = p.kind === "composer" ? "composer install" : `${pm} install`;
       nodes.push({ tile: icon("box"), title: name, sub: "Not installed yet", missing: true,
-        right: el("button", { class: "primary", disabled: !!job.running, title: `Run ${cmd} in ${s.path}`,
-          onclick: () => act(() => api("POST", "/api/sites/install", { site: s.host, kind: p.kind })) }, cmd) });
+        right: el("button", { class: "primary", disabled: !!job.running, title: job.running ? `Wait: ${job.message}` : `Run ${cmd} in ${s.path}`,
+          onclick: () => { siteJobHost = s.host; act(() => api("POST", "/api/sites/install", { site: s.host, kind: p.kind })); } }, cmd) });
     }
   }
   return nodes;
@@ -677,7 +682,11 @@ function renderSiteDetail(installed, shares, qrows) {
           el("div", { class: "sd-sub" }, n.sub)),
         n.right ? el("div", { class: "sd-right" }, n.right) : null)))
       : el("p", { class: "sd-empty" }, "Nothing else to show for this site."));
-  box.replaceChildren(head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph);
+  // The install this page started: progress, then what happened.
+  const job = vers?.job || {};
+  const ours = siteJobHost === s.host || (job.running && (job.message || "").includes(` for ${s.host}`));
+  const jobLine = el("p", { class: "job" + (ours && job.error ? " err" : ""), role: "status" }, ours ? jobText("site", job) : "");
+  box.replaceChildren(head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph, jobLine);
   wireObs.disconnect();
   wireObs.observe(graph);
   drawWires();
@@ -2196,8 +2205,9 @@ $("sitefind").addEventListener("input", () => render());
 $("sitefind").addEventListener("keydown", (e) => {
   if (e.key === "Escape") { if (e.target.value) { e.target.value = ""; render(); } else e.target.blur(); }
   if (e.key === "Enter") {
+    // Enter opens the first match's website; its name links to its details.
     const first = $("sites").querySelector(".site .host");
-    if (first && e.target.value.trim()) window.open(first.href, "_blank", "noopener");
+    if (first && e.target.value.trim()) window.open(siteURL(first.textContent), "_blank", "noopener");
   }
 });
 

@@ -69,8 +69,8 @@ func readEnvFile(dir string) (map[string]string, bool) {
 		}
 		v := m[2]
 		if len(v) >= 1 && (v[0] == '"' || v[0] == '\'') {
-			if end := strings.IndexByte(v[1:], v[0]); end >= 0 {
-				v = v[1 : end+1]
+			if end := closingQuote(v); end > 0 {
+				v = v[1:end]
 			}
 		} else if i := strings.Index(v, " #"); i >= 0 {
 			v = strings.TrimSpace(v[:i])
@@ -80,6 +80,21 @@ func readEnvFile(dir string) (map[string]string, bool) {
 		vals[m[1]] = v
 	}
 	return vals, true
+}
+
+// closingQuote is the index of the quote that ends v (which starts with
+// one), skipping \" inside double quotes; -1 when there is none.
+func closingQuote(v string) int {
+	for i := 1; i < len(v); i++ {
+		if v[0] == '"' && v[i] == '\\' {
+			i++
+			continue
+		}
+		if v[i] == v[0] {
+			return i
+		}
+	}
+	return -1
 }
 
 func isLoopback(host string) bool {
@@ -133,7 +148,8 @@ func laravelFacts(vals map[string]string, dir string, p localPorts) projectFacts
 	if queue == "redis" {
 		roles = append(roles, "queue")
 	}
-	if _, set := vals["REDIS_HOST"]; set || len(roles) > 0 {
+	// Only when something uses it: Laravel's stock .env always has REDIS_HOST.
+	if len(roles) > 0 {
 		host := get("REDIS_HOST", "127.0.0.1")
 		port, _ := strconv.Atoi(get("REDIS_PORT", "6379"))
 		f.Redis = &redisFact{Host: host, Port: port, Local: isLoopback(host) && port == p.Redis, Roles: roles}

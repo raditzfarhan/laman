@@ -23,7 +23,7 @@ func TestMeasureDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (dirSizes{Total: 1110, Vendor: 1000, NodeModules: 10}); got != want {
+	if want := (dirSizes{Total: 1110, Vendor: 1000, NodeModules: 10, HasVendor: true, HasNodeModules: true}); got != want {
 		t.Errorf("measureDir = %+v, want %+v", got, want)
 	}
 }
@@ -38,7 +38,7 @@ func TestDirSizeSkipsJunctions(t *testing.T) {
 	go func() { s, _ := measureDir(dir); done <- s }()
 	select {
 	case got := <-done:
-		if want := (dirSizes{Total: 1110, Vendor: 1000, NodeModules: 10}); got != want {
+		if want := (dirSizes{Total: 1110, Vendor: 1000, NodeModules: 10, HasVendor: true, HasNodeModules: true}); got != want {
 			t.Errorf("measureDir = %+v, want %+v (junction followed?)", got, want)
 		}
 	case <-time.After(5 * time.Second):

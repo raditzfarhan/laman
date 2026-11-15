@@ -303,6 +303,13 @@ var errBusy = errors.New("another install is still running")
 
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")), "\n")
+	// Composer explains a failed install under "Problem 1", then adds
+	// generic hints: the first problem is the useful line.
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "Problem 1" && i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
+			return strings.TrimSpace(lines[i+1])
+		}
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		if l := strings.TrimSpace(lines[i]); l != "" && !strings.Contains(l, " MB") {
 			return l
