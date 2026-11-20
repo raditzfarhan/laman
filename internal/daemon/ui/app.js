@@ -549,7 +549,7 @@ async function loadDetail() {
     detail = d;
     detailErr = "";
     if (d.facts.queue) loadQueues(); // renders itself
-    await loadWorkerLogs(host);
+    loadWorkerLogs(host); // in the background: a slow log never holds up the page
   } catch (e) {
     if (host !== siteHost()) return;
     detail = null;
@@ -753,11 +753,17 @@ const detailShape = (d) => {
   return { ...d, workers: { ...d.workers, queue: noUp(d.workers.queue), reverb: noUp(d.workers.reverb) } };
 };
 
-async function loadWorkerLogs(host) {
+// Open logs load on their own, one request per log at a time; each fills
+// its <pre> in place when it returns.
+const wkLoading = new Set(); // "host|kind" whose log request is in flight
+function loadWorkerLogs(host) {
   for (const key of wkOpen) {
     const [h, kind] = key.split("|");
-    if (h !== host) continue;
-    try { wkOut[key] = String(await api("GET", `/api/workers/${kind}/log?site=${encodeURIComponent(h)}`)).replace(/^\s*\n|\s+$/g, ""); } catch (e) { wkOut[key] = e.message; }
+    if (h !== host || wkLoading.has(key)) continue;
+    wkLoading.add(key);
+    api("GET", `/api/workers/${kind}/log?site=${encodeURIComponent(h)}`)
+      .then((t) => { wkOut[key] = String(t).replace(/^\s*\n|\s+$/g, ""); }, (e) => { wkOut[key] = e.message; })
+      .finally(() => { wkLoading.delete(key); render(); });
   }
 }
 
@@ -841,7 +847,7 @@ function workerRow(s, kind, w) {
       el("button", { disabled: busy || !w.on, title: `Restart ${host}'s ${WK_NAMES[kind].toLowerCase()}`,
         onclick: () => workerAction(host, kind, `/api/workers/${kind}/restart`, {}) }, busy ? "…" : "Restart"),
       el("button", { class: "linkish", "aria-expanded": open ? "true" : "false", disabled: !w.on && !open,
-        onclick: async () => { open ? wkOpen.delete(key) : wkOpen.add(key); render(true); if (!open) { await loadWorkerLogs(host); render(); } } }, open ? "Hide log" : "Log")),
+        onclick: () => { open ? wkOpen.delete(key) : wkOpen.add(key); render(true); if (!open) loadWorkerLogs(host); } }, open ? "Hide log" : "Log")),
     subs.length ? el("div", { class: "wk-sub" }, subs) : null,
     open ? el("div", { class: "devout" }, el("pre", { "data-wkout": key, tabindex: "0", "aria-label": `${host} ${WK_NAMES[kind].toLowerCase()} log` })) : null);
 }
