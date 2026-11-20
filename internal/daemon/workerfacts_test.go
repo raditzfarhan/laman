@@ -89,3 +89,36 @@ func TestReverbArgs(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestUsesHorizon(t *testing.T) {
+	mk := func(json string, vendor bool) string {
+		d := t.TempDir()
+		if json != "" {
+			os.WriteFile(filepath.Join(d, "composer.json"), []byte(json), 0o644)
+		}
+		if vendor {
+			os.MkdirAll(filepath.Join(d, "vendor", "laravel", "horizon"), 0o755)
+		}
+		return d
+	}
+	if !usesHorizon(mk(`{"require":{"laravel/horizon":"^5"}}`, false)) {
+		t.Error("require not found")
+	}
+	// Only a dev dependency (installed under vendor too): the app does not
+	// run Horizon itself.
+	if usesHorizon(mk(`{"require-dev":{"laravel/horizon":"^5"}}`, true)) {
+		t.Error("require-dev counted")
+	}
+	if !usesHorizon(mk("", true)) {
+		t.Error("vendor fallback without composer.json not found")
+	}
+	if usesHorizon(mk(`{"require":{"php":"^8"}}`, false)) {
+		t.Error("false positive")
+	}
+	dev := t.TempDir()
+	os.WriteFile(filepath.Join(dev, "composer.json"), []byte(`{"require-dev":{"laravel/horizon":"^5"}}`), 0o644)
+	os.MkdirAll(filepath.Join(dev, "vendor", "laravel", "horizon"), 0o755)
+	if p := planQueue(dev, map[string]string{"QUEUE_CONNECTION": "redis"}, nil); p.Note != "" {
+		t.Errorf("planQueue note for a dev-only Horizon = %q", p.Note)
+	}
+}

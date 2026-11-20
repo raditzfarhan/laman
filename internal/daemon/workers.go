@@ -550,7 +550,7 @@ func realWorkerCommand(w *worker) (*exec.Cmd, string, error) {
 	case workerQueue:
 		vals, _ := readEnvFile(dir)
 		var queues []string
-		if composerRequires(dir, "laravel/horizon") {
+		if usesHorizon(dir) {
 			queues = horizonQueues(phpExe, dir)
 		}
 		plan := planQueue(dir, vals, queues)

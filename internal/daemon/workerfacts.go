@@ -40,6 +40,23 @@ func composerRequires(dir, pkg string) bool {
 	return exists(filepath.Join(dir, "vendor", filepath.FromSlash(pkg)))
 }
 
+// usesHorizon reports whether the app itself runs Horizon: laravel/horizon in
+// composer.json's require (a dev-only dependency does not count). Only
+// without a readable composer.json does an installed vendor/laravel/horizon
+// decide.
+func usesHorizon(dir string) bool {
+	if b, err := os.ReadFile(filepath.Join(dir, "composer.json")); err == nil {
+		var c struct {
+			Require map[string]json.RawMessage `json:"require"`
+		}
+		if json.Unmarshal(b, &c) == nil {
+			_, ok := c.Require["laravel/horizon"]
+			return ok
+		}
+	}
+	return exists(filepath.Join(dir, "vendor", "laravel", "horizon"))
+}
+
 // localHost reports whether a host value points at this machine's services.
 func localHost(h string) bool {
 	h = strings.TrimSpace(h)
@@ -71,7 +88,7 @@ func planQueue(dir string, vals map[string]string, horizonQueues []string) queue
 			p.Needs = "postgres"
 		}
 	}
-	if composerRequires(dir, "laravel/horizon") {
+	if usesHorizon(dir) {
 		p.Note = "Horizon doesn't run on Windows — using queue:listen"
 		if len(horizonQueues) > 0 {
 			p.Args = append(p.Args, "--queue="+strings.Join(horizonQueues, ","))
