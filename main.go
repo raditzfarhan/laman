@@ -77,6 +77,8 @@ Usage:
   laman link [name] [path]        serve one folder outside your project folders (default: current dir)
   laman unlink <name>             remove a link
   laman dev [start|stop|log] [site]  run a Node app's dev server behind its .test name
+  laman queue  on|off|restart|status|log [site]         run a Laravel site's queue worker
+  laman reverb on|off|restart|status|log|env [site]  run a Laravel site's Reverb server
   laman proxy <name> <port>       serve <name>.test from a port (Docker, your own server)
   laman hosts                     write *.test entries to the hosts file (asks for admin)
   laman trust [--reset]           trust laman's local CA so https:// works without warnings
@@ -165,6 +167,10 @@ func main() {
 		err = cmdShare(args)
 	case "dev":
 		err = cmdDev(args)
+	case "queue":
+		err = cmdQueue(args)
+	case "reverb":
+		err = cmdReverb(args)
 	case "proxy":
 		err = cmdProxy(args)
 	case "psql":
