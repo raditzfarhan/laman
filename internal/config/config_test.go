@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -190,5 +192,60 @@ func TestFolderPrefix(t *testing.T) {
 	c.SetFolderPrefix(group, "ac")
 	if _, err := c.RemoveSitesDir(group); err != nil || c.FolderPrefix != nil {
 		t.Errorf("removing the folder should drop its prefix: %v %v", err, c.FolderPrefix)
+	}
+}
+
+func TestReverbPortIsStable(t *testing.T) {
+	c := &Config{}
+	if p := c.ReverbPort("acme"); p != 8100 {
+		t.Fatalf("acme = %d, want 8100", p)
+	}
+	if p := c.ReverbPort("shop"); p != 8101 {
+		t.Fatalf("shop = %d, want 8101", p)
+	}
+	if p := c.ReverbPort("acme"); p != 8100 {
+		t.Fatalf("acme again = %d, want 8100", p)
+	}
+
+	c = &Config{ReverbPorts: map[string]int{"x": 8100}}
+	if p := c.ReverbPort("new"); p != 8101 {
+		t.Fatalf("new = %d, want 8101", p)
+	}
+
+	full := map[string]int{}
+	for p := ReverbFirstPort; p <= ReverbLastPort; p++ {
+		full[strconv.Itoa(p)] = p
+	}
+	c = &Config{ReverbPorts: full}
+	if p := c.ReverbPort("late"); p != 0 {
+		t.Fatalf("full range = %d, want 0", p)
+	}
+}
+
+func TestQueueReverbJSONKeys(t *testing.T) {
+	c := &Config{
+		QueueWorkers: map[string]bool{"a": true},
+		Reverb:       map[string]bool{"a": true},
+		ReverbPorts:  map[string]int{"a": 8100},
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"queueWorkers", "reverb", "reverbPorts"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing key %q in %s", k, b)
+		}
+	}
+	var back Config
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !back.QueueWorkers["a"] || !back.Reverb["a"] || back.ReverbPorts["a"] != 8100 {
+		t.Errorf("round trip lost data: %+v", back)
 	}
 }

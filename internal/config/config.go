@@ -71,6 +71,12 @@ type Config struct {
 	Proxies map[string]string `json:"proxies,omitempty"`
 	// DevAuto: Node sites (by name) whose dev server starts with laman.
 	DevAuto map[string]bool `json:"devAuto,omitempty"`
+	// QueueWorkers: Laravel sites (by name) whose queue worker runs with laman.
+	QueueWorkers map[string]bool `json:"queueWorkers,omitempty"`
+	// Reverb: Laravel sites (by name) whose Reverb server runs with laman;
+	// ReverbPorts holds each site's assigned port (site -> port).
+	Reverb      map[string]bool `json:"reverb,omitempty"`
+	ReverbPorts map[string]int  `json:"reverbPorts,omitempty"`
 	// NoUpdateCheck stops the daily look for a newer laman release.
 	NoUpdateCheck bool `json:"noUpdateCheck,omitempty"`
 	// LaragonNotice is "imported" once `laman import laragon` has run, so
@@ -371,10 +377,48 @@ func Load() (*Config, error) {
 	if c.Links == nil {
 		c.Links = map[string]string{}
 	}
+	if c.QueueWorkers == nil {
+		c.QueueWorkers = map[string]bool{}
+	}
+	if c.Reverb == nil {
+		c.Reverb = map[string]bool{}
+	}
+	if c.ReverbPorts == nil {
+		c.ReverbPorts = map[string]int{}
+	}
 	if c.PHPWorkers < 1 {
 		c.PHPWorkers = 1
 	}
 	return c, nil
+}
+
+// The range Reverb ports are handed out from.
+const (
+	ReverbFirstPort = 8100
+	ReverbLastPort  = 8199
+)
+
+// ReverbPort returns the site's Reverb port, assigning the lowest free one
+// in the range on first use. It only updates the map: the caller saves the
+// config. It returns 0 when the range is full.
+func (c *Config) ReverbPort(site string) int {
+	if p, ok := c.ReverbPorts[site]; ok {
+		return p
+	}
+	used := map[int]bool{}
+	for _, p := range c.ReverbPorts {
+		used[p] = true
+	}
+	for p := ReverbFirstPort; p <= ReverbLastPort; p++ {
+		if !used[p] {
+			if c.ReverbPorts == nil {
+				c.ReverbPorts = map[string]int{}
+			}
+			c.ReverbPorts[site] = p
+			return p
+		}
+	}
+	return 0
 }
 
 func (c *Config) Save() error {
