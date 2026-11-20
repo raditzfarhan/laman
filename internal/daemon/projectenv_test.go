@@ -40,7 +40,7 @@ func TestReadEnvFileForms(t *testing.T) {
 	}
 	for k, want := range map[string]string{
 		"DB_HOST": "127.0.0.1", "DB_DATABASE": "acme", "APP_NAME": "Acme # Shop", "MAIL_HOST": "127.0.0.1",
-		"APP_URL": `Bob \"the\" Shop`, // escaped quotes kept, as before
+		"APP_URL": `Bob "the" Shop`, // \" is unescaped, as the editor reads it
 	} {
 		if vals[k] != want {
 			t.Errorf("%s = %q, want %q", k, vals[k], want)

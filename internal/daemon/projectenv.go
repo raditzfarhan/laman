@@ -53,31 +53,17 @@ type projectFacts struct {
 
 var envAssign = regexp.MustCompile(`^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(.*?)[ \t]*$`)
 
-// readEnvFile reads dir/.env as dotenv does: `export ` prefixes, quoted
-// values, and ` #` comments after unquoted values. ok is false when there
-// is no .env.
+// readEnvFile reads dir/.env as dotenv does (see parseEnv): `export `
+// prefixes, quoted values, and ` #` comments after unquoted values. ok is
+// false when there is no .env.
 func readEnvFile(dir string) (map[string]string, bool) {
 	b, err := os.ReadFile(filepath.Join(dir, ".env"))
 	if err != nil {
 		return nil, false
 	}
 	vals := map[string]string{}
-	for _, line := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
-		m := envAssign.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
-			continue
-		}
-		v := m[2]
-		if len(v) >= 1 && (v[0] == '"' || v[0] == '\'') {
-			if end := closingQuote(v); end > 0 {
-				v = v[1:end]
-			}
-		} else if i := strings.Index(v, " #"); i >= 0 {
-			v = strings.TrimSpace(v[:i])
-		} else if strings.HasPrefix(v, "#") {
-			v = ""
-		}
-		vals[m[1]] = v
+	for _, l := range parseEnv(string(b)) {
+		vals[l.Key] = l.Value // the last assignment wins, as in phpdotenv
 	}
 	return vals, true
 }
