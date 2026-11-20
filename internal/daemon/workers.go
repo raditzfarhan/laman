@@ -33,10 +33,17 @@ const (
 	workerStopped  = "stopped"
 
 	workerMaxCrashes = 5
-	workerStopWait   = 10 * time.Second
 )
 
 var (
+	// workerStopWait: how long a stop waits for the process to exit.
+	workerStopWait = 10 * time.Second
+	// workerReadyWait: how long Reverb has to open its port.
+	workerReadyWait = time.Minute
+	// workerOutputWait: after the process exits, how long Wait waits for
+	// output still held open by children it left behind.
+	workerOutputWait = 5 * time.Second
+
 	// workerCommand builds the process for a worker; tests replace it.
 	workerCommand = realWorkerCommand
 	// workerBackoff is the wait before the n-th consecutive restart.
@@ -76,6 +83,7 @@ type worker struct {
 	errMsg  string
 	since   time.Time
 	stop    bool          // stop was asked for: an exit is not a crash
+	failed  bool          // laman gave up on this run (Reverb never opened its port): its exit is not a crash
 	gen     int           // bumped by each startWorker; older timers and exits are ignored
 	timer   *time.Timer   // a pending restart
 	done    chan struct{} // closed when the running process has exited
@@ -196,6 +204,7 @@ func (d *daemon) startWorker(kind, host string) error {
 		return nil
 	}
 	w.site = site // the folder or PHP may have changed since the last start
+	w.failed = false
 	w.gen++
 	gen := w.gen
 	if w.timer != nil {
@@ -290,8 +299,16 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 	if err != nil {
 		return fail(err)
 	}
-	pr, pw := io.Pipe()
+	// An OS pipe rather than io.Pipe: cmd.Wait then returns when the process
+	// exits, even if children it left behind (queue:listen's queue:work)
+	// still hold the pipe; reading goes on until they are gone.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		out.Close()
+		return fail(err)
+	}
 	cmd.Stdout, cmd.Stderr = pw, pw
+	cmd.WaitDelay = workerOutputWait // only matters if a command brings its own writer
 	fmt.Fprintf(out, "[laman %s] %s> %s\n", time.Now().Format(time.RFC3339), site.Path, line)
 
 	// Start under w.mu so a stop either sees the pid or stops this start.
@@ -300,18 +317,23 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 		w.mu.Unlock()
 		out.Close()
 		pw.Close()
+		pr.Close()
 		return nil
 	}
+	startedAt := time.Now() // children it starts are created after this
 	if err := cmd.Start(); err != nil {
 		w.state, w.errMsg = workerCrashed, err.Error()
 		w.addLineLocked("[laman] " + err.Error())
 		w.mu.Unlock()
 		out.Close()
 		pw.Close()
+		pr.Close()
 		return err
 	}
+	pw.Close() // the process has its copy; reading ends when every holder closes it
+	pid := cmd.Process.Pid
 	done := make(chan struct{})
-	w.pid, w.cmdline, w.since, w.done, w.errMsg = cmd.Process.Pid, line, time.Now(), done, ""
+	w.pid, w.cmdline, w.since, w.done, w.errMsg = pid, line, time.Now(), done, ""
 	if w.kind == workerReverb {
 		w.state = workerStarting // running once its port answers
 	} else {
@@ -321,11 +343,13 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 
 	go readWorkerOutput(w, pr, out)
 	if w.kind == workerReverb {
-		go waitWorkerPort(w, gen, port)
+		go waitWorkerPort(w, gen, pid, port)
 	}
 	go func() {
 		err := cmd.Wait()
-		pw.Close()
+		// A crashed queue:listen can leave its queue:work child running;
+		// end whatever it left behind before a restart starts another.
+		killChildren(pid, startedAt)
 		d.workerExited(w, gen, err)
 		close(done)
 	}()
@@ -337,13 +361,16 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 func (d *daemon) workerExited(w *worker, gen int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.pid = 0
 	if w.gen != gen {
-		return // a newer start owns the worker
+		return // a newer start owns the worker (and its pid)
 	}
+	w.pid = 0
 	if w.stop {
 		w.state = workerStopped
 		return
+	}
+	if w.failed {
+		return // laman ended it and already said why
 	}
 	msg := "exited"
 	if err != nil {
@@ -385,30 +412,55 @@ func (d *daemon) workerExited(w *worker, gen int, err error) {
 	})
 }
 
-// waitWorkerPort marks Reverb running once its port answers.
-func waitWorkerPort(w *worker, gen, port int) {
-	deadline := time.Now().Add(time.Minute)
+// waitWorkerPort marks Reverb running once its port answers. One that does
+// not open it in time is ended and marked crashed (it is not restarted).
+func waitWorkerPort(w *worker, gen, pid, port int) {
+	// mine: the run being watched is still the worker's, and still starting.
+	mine := func() bool { return w.current(gen) && w.pid == pid && w.state == workerStarting }
+	deadline := time.Now().Add(workerReadyWait)
 	for time.Now().Before(deadline) {
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(min(300*time.Millisecond, workerReadyWait/4))
 		w.mu.Lock()
-		waiting := w.current(gen) && w.state == workerStarting && w.pid != 0
+		ok := mine()
 		w.mu.Unlock()
-		if !waiting {
+		if !ok {
 			return
 		}
 		if portOpen(port) {
 			w.mu.Lock()
-			if w.current(gen) && w.state == workerStarting && w.pid != 0 {
+			if mine() {
 				w.state = workerRunning
 			}
 			w.mu.Unlock()
 			return
 		}
 	}
+	w.mu.Lock()
+	if !mine() {
+		w.mu.Unlock()
+		return
+	}
+	msg := fmt.Sprintf("Reverb did not open port %d within %s", port, waitText(workerReadyWait))
+	w.state, w.errMsg, w.failed = workerCrashed, msg, true
+	w.addLineLocked("[laman] " + msg)
+	host := w.site.Host
+	w.mu.Unlock()
+	if err := killTree(pid); err != nil {
+		logf("ending reverb for %s (pid %d): %v", host, pid, err)
+	}
 }
 
-func readWorkerOutput(w *worker, r io.Reader, out *os.File) {
+// waitText: "1 minute" for the default wait, else Go's duration text.
+func waitText(d time.Duration) string {
+	if d == time.Minute {
+		return "1 minute"
+	}
+	return d.String()
+}
+
+func readWorkerOutput(w *worker, r, out *os.File) {
 	defer out.Close()
+	defer r.Close()
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
@@ -495,23 +547,30 @@ func realWorkerCommand(w *worker) (*exec.Cmd, string, error) {
 
 // stopWorker stops a worker and everything it started, cancels a pending
 // restart, and waits (briefly) for the exit. The state is then stopped.
-func (d *daemon) stopWorker(kind, host string) {
+func (d *daemon) stopWorker(kind, host string) { d.stopWorkerWait(kind, host) }
+
+// stopWorkerWait is stopWorker, reporting false when the process had not
+// exited within workerStopWait.
+func (d *daemon) stopWorkerWait(kind, host string) bool {
 	if s, ok := d.findSite(host); ok {
 		host = s.Host
 	}
 	w := d.worker(kind, host)
 	if w == nil {
-		return
+		return true
 	}
 	pid, done := w.halt()
-	if pid != 0 {
-		if err := killTree(pid); err != nil {
-			logf("stopping %s worker %s (pid %d): %v", kind, host, pid, err)
-		}
-		select {
-		case <-done:
-		case <-time.After(workerStopWait):
-		}
+	if pid == 0 {
+		return true
+	}
+	if err := killTree(pid); err != nil {
+		logf("stopping %s worker %s (pid %d): %v", kind, host, pid, err)
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(workerStopWait):
+		return false
 	}
 }
 
@@ -520,7 +579,7 @@ func (d *daemon) stopWorker(kind, host string) {
 func (w *worker) halt() (int, chan struct{}) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.stop = true
+	w.stop, w.errMsg = true, ""
 	if w.timer != nil {
 		w.timer.Stop()
 		w.timer = nil
@@ -533,7 +592,9 @@ func (w *worker) halt() (int, chan struct{}) {
 
 // restartWorker stops and starts a worker, e.g. after code changes.
 func (d *daemon) restartWorker(kind, host string) error {
-	d.stopWorker(kind, host)
+	if !d.stopWorkerWait(kind, host) {
+		return fmt.Errorf("%s for %s is still stopping", kind, host)
+	}
 	return d.startWorker(kind, host)
 }
 
