@@ -875,6 +875,7 @@ async function setupReverbEnv(host) {
     alertNote(changed.length
       ? `Set up ${host}'s .env for Reverb: ${changed.length > 3 ? `${changed.length} lines` : changed.join(", ")} changed.${r.backup ? ` Previous .env saved to ${r.backup}.` : ""} Restart Vite (npm run dev) or rebuild so the browser picks up the new values.`
       : `${host}'s .env was already set up for laman.`, "note info");
+    if (envState[host]) envLoad(host, true); // the Environment section's fingerprint is stale now
     if (r.configCached) alertNote(`${host}'s config is cached — run php artisan config:clear so Laravel reads the new .env.`, "note warn");
   });
 }
@@ -1074,6 +1075,7 @@ function envClear(st) {
   st.adding = null;
   st.ask = null;
   if (st.raw) st.raw.text = st.raw.norm;
+  st.rawStale = false;
 }
 
 // After a reload, keep what the user typed, against the file as it is now.
@@ -1176,7 +1178,9 @@ function envTable(st, busy) {
       el("div", { class: "panel env-table" }, missing.map((m) => el("div", { class: "env-row miss", "data-key": m.key },
         el("span", { class: "env-k mono" }, el("span", { class: "env-name" }, m.key)),
         el("span", { class: "env-v" }, el("span", { class: "env-val mono plain", title: m.masked ? "" : m.value }, m.masked ? el("span", { class: "env-none" }, "(secret — not shown)") : envEmpty(m.value))),
-        el("span", { class: "env-acts" }, el("button", { class: "env-addbtn", "data-f": `miss:${m.key}`, disabled: busy, title: `Add ${m.key} to .env${m.masked ? "" : " with the example's value"}`,
+        el("span", { class: "env-acts" }, m.multiline
+          ? el("button", { class: "linkish", "data-f": `rawlink:${m.key}`, title: "The example's value has a line break", onclick: () => envTab(st, "raw") }, "add it in Raw")
+          : el("button", { class: "env-addbtn", "data-f": `miss:${m.key}`, disabled: busy, title: `Add ${m.key} to .env${m.masked ? "" : " with the example's value"}`,
           onclick: () => {
             st.added.push(m.key);
             st.edits.set(m.key, m.value);
@@ -1413,11 +1417,17 @@ function envRawPane(st) {
       el("button", { "data-f": "showraw", disabled: !!st.busy, onclick: () => envRawLoad(st) }, st.busy === "raw" ? "Loading…" : "Show raw file (shows secrets)"));
   }
   const lines = st.raw.text.split("\n").length;
+  const stale = st.rawStale && envRawDirty(st)
+    ? el("div", { class: "note warn env-stale" }, el("span", {}, "The file changed on disk. Saving now replaces it with your text. "),
+      el("button", { class: "inline", "data-f": "stalesave", disabled: !!st.busy, onclick: () => envSave(st) }, "Save"),
+      " ",
+      el("button", { class: "inline", "data-f": "staledrop", disabled: !!st.busy, onclick: () => { st.raw.text = st.raw.norm; st.rawStale = false; st.focus = "raw"; envDraw(st.host); } }, "Discard my edits"))
+    : null;
   const ta = el("textarea", { class: "env-raw mono", spellcheck: "false", autocomplete: "off", wrap: "off", "aria-label": ".env file", "data-f": "raw",
     rows: String(Math.min(30, Math.max(8, lines + 1))), disabled: st.busy === "save",
     oninput: (e) => { st.raw.text = e.target.value; envBarDraw(st); } });
   ta.value = st.raw.text;
-  return el("div", { class: "env-rawbox" }, ta,
+  return el("div", { class: "env-rawbox" }, stale, ta,
     el("p", { class: "env-fine" }, "Save writes this text as the whole file; the current one goes to Backups first."));
 }
 
@@ -1463,6 +1473,7 @@ async function envAfter(st, r, msg, keep, raw) {
   if (r.changed) st.notes = { configCached: !!r.configCached, workers: r.workers || [], devRunning: !!r.devRunning };
   alertNote(msg, "note info");
   if (!keep) envClear(st);
+  st.rawStale = false;
   st.raw = raw || null; // the raw text is the file's again, or read anew when Raw opens
   if (!st.raw && st.rawSeen && st.tab === "raw") envRawLoad(st);
   if (st.backupsOpen) envBackupsLoad(st);
@@ -1476,10 +1487,24 @@ function envFail(st, e) {
   if (!/changed on disk/.test(e.message)) return alertNote(e.message);
   const msg = ".env changed on disk since you opened it — reload";
   alertNote(msg, "note warn", [el("code", {}, ".env"), " changed on disk since you opened it — ",
-    el("button", { class: "inline", onclick: () => { dropToast(msg); envReload(st); } }, "Reload")]);
+    el("button", { class: "inline", onclick: () => { dropToast(msg); envReload(st); } }, st.tab === "raw" && envRawDirty(st) ? "Reload (keeps your raw edits)" : "Reload")]);
 }
-function envReload(st) {
+async function envReload(st) {
   if (envState[st.host] !== st) return;
+  if (st.raw && st.tab === "raw" && envRawDirty(st)) {
+    // Unsaved raw edits: keep the text, take the file's new fingerprint and text.
+    try {
+      const r = await api("GET", `/api/env/raw?${envQ(st.host)}`);
+      if (envState[st.host] !== st || !st.raw) return;
+      const norm = r.text.replace(/\r\n?/g, "\n");
+      Object.assign(st.raw, { orig: r.text, norm, fingerprint: r.fingerprint });
+      st.rawStale = true;
+      st.focus = "raw";
+    } catch (e) { alertNote(e.message); }
+    envLoad(st.host, true);
+    return;
+  }
+  st.rawStale = false;
   if (st.raw) { st.raw = null; if (st.tab === "raw") envRawLoad(st); }
   envLoad(st.host, true);
 }
