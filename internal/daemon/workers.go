@@ -1034,7 +1034,10 @@ func (d *daemon) workerRoutes(mux *http.ServeMux) {
 			}
 		}
 		port := 0
-		err := d.saveConfig(func(c *config.Config) error {
+		// The daemon's copy follows under the same cfgMu hold, so a
+		// concurrent on and off cannot leave memory and disk disagreeing.
+		// The next refresh reloads it anyway.
+		err := d.saveConfigThen(func(c *config.Config) error {
 			m := &c.QueueWorkers
 			if kind == workerReverb {
 				m = &c.Reverb
@@ -1053,32 +1056,32 @@ func (d *daemon) workerRoutes(mux *http.ServeMux) {
 				}
 			}
 			return nil
+		}, func() {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			m := &d.cfg.QueueWorkers
+			if kind == workerReverb {
+				m = &d.cfg.Reverb
+			}
+			if req.On {
+				if *m == nil {
+					*m = map[string]bool{}
+				}
+				(*m)[s.Name] = true
+			} else {
+				delete(*m, s.Name)
+			}
+			if port > 0 {
+				if d.cfg.ReverbPorts == nil {
+					d.cfg.ReverbPorts = map[string]int{}
+				}
+				d.cfg.ReverbPorts[s.Name] = port
+			}
 		})
 		if err != nil {
 			fail(w, http.StatusBadRequest, "%v", err)
 			return
 		}
-		// The daemon's copy follows at once; the next refresh reloads it.
-		d.mu.Lock()
-		m := &d.cfg.QueueWorkers
-		if kind == workerReverb {
-			m = &d.cfg.Reverb
-		}
-		if req.On {
-			if *m == nil {
-				*m = map[string]bool{}
-			}
-			(*m)[s.Name] = true
-		} else {
-			delete(*m, s.Name)
-		}
-		if port > 0 {
-			if d.cfg.ReverbPorts == nil {
-				d.cfg.ReverbPorts = map[string]int{}
-			}
-			d.cfg.ReverbPorts[s.Name] = port
-		}
-		d.mu.Unlock()
 
 		if req.On {
 			// A failed start shows in the state (crashed, with the error).

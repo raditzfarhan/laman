@@ -261,6 +261,13 @@ func (d *daemon) updateConfig(w http.ResponseWriter, change func(*config.Config)
 // saveConfig loads laman's config from disk, applies change and saves it,
 // one writer at a time.
 func (d *daemon) saveConfig(change func(*config.Config) error) error {
+	return d.saveConfigThen(change, nil)
+}
+
+// saveConfigThen is saveConfig that also runs saved, when the save worked,
+// before the next writer can start: the place to bring the daemon's own copy
+// in line with what was saved. saved may take d.mu (cfgMu comes first).
+func (d *daemon) saveConfigThen(change func(*config.Config) error, saved func()) error {
 	d.cfgMu.Lock()
 	defer d.cfgMu.Unlock()
 	cfg, err := config.Load()
@@ -269,6 +276,9 @@ func (d *daemon) saveConfig(change func(*config.Config) error) error {
 	}
 	if err == nil {
 		err = cfg.Save()
+	}
+	if err == nil && saved != nil {
+		saved()
 	}
 	return err
 }

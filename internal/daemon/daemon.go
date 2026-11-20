@@ -476,6 +476,10 @@ func (d *daemon) buildService(kind string) *Service {
 func (d *daemon) refresh() error {
 	d.refreshMu.Lock()
 	defer d.refreshMu.Unlock()
+	// Under cfgMu until the copy is taken, so a worker switch cannot save
+	// and update the daemon's copy in between, which this would then undo
+	// with what it loaded before. Nothing that holds cfgMu calls refresh.
+	d.cfgMu.Lock()
 	if fresh, err := config.Load(); err == nil {
 		// Only fields that take effect without a restart.
 		d.cfg.SitesDir, d.cfg.MoreSitesDirs, d.cfg.FolderPrefix = fresh.SitesDir, fresh.MoreSitesDirs, fresh.FolderPrefix
@@ -488,6 +492,7 @@ func (d *daemon) refresh() error {
 		d.cfg.QueueWorkers, d.cfg.Reverb = fresh.QueueWorkers, fresh.Reverb
 		d.mu.Unlock()
 	}
+	d.cfgMu.Unlock()
 	raw, clashes := d.cfg.Discover()
 
 	// Work out which PHP version each site needs and make sure a pool runs
