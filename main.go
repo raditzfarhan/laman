@@ -873,6 +873,12 @@ func cmdTrust(args []string) error {
 		}
 		fmt.Println("Trusted. Fully quit and reopen your browser (Edge: also close it from the tray if Startup boost is on).")
 	}
+	bundle := filepath.Join(config.EtcDir(), "cacert.pem")
+	if _, err := ca.AddToBundle(bundle); err != nil {
+		fmt.Fprintf(os.Stderr, "could not add the CA to PHP's CA bundle: %v\n", err)
+	} else if _, err := os.Stat(bundle); err == nil {
+		fmt.Printf("PHP trusts .%s sites\n", cfg.TLD)
+	}
 	if cfg.HTTPSPort == 0 {
 		fmt.Println(`HTTPS is disabled; set "httpsPort": 443 in the config and restart laman.`)
 	}

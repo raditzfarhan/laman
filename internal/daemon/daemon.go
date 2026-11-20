@@ -666,6 +666,12 @@ func (d *daemon) issueCerts(in *caddyconf.Input, list []sites.Site) (tlsState, b
 		return tlsState{note: "HTTPS is off: " + err.Error()}, false
 	}
 	st := tlsState{enabled: true, trusted: ca.Trusted()}
+	// PHP's CA bundle gets laman's CA so curl/openssl accept .<tld> sites.
+	if ch, err := ca.AddToBundle(filepath.Join(config.EtcDir(), "cacert.pem")); err != nil {
+		logf("PHP CA bundle: %v", err)
+	} else if ch {
+		logf("added laman's CA to PHP's CA bundle")
+	}
 	dir := config.CertDir()
 	crt, key, changed, err := ca.Leaf(dir, "localhost", []net.IP{net.IPv4(127, 0, 0, 1).To4(), net.IPv6loopback})
 	if err != nil {
