@@ -58,6 +58,7 @@ type Status struct {
 	Editor       string          `json:"editor,omitempty"` // the editor "Open in editor" uses, by name ("" = none installed)
 	Folders      []sites.Folder  `json:"folders"`
 	Dev          []DevStatus     `json:"dev"`               // dev servers started since laman started
+	Workers      []WorkerBrief   `json:"workers"`           // switched-on queue workers and Reverb servers
 	DevAuto      map[string]bool `json:"devAuto,omitempty"` // site names whose dev server starts with laman   // the same, with name prefixes
 
 	// Off lists installed add-on servers that are turned off.
@@ -714,10 +715,15 @@ func (d *daemon) watch(ctx context.Context) {
 }
 
 func (d *daemon) status() Status {
+	workers := []WorkerBrief{} // before d.mu: workerState takes it
+	for _, w := range d.switchedOnWorkers() {
+		workers = append(workers, WorkerBrief{Host: w.Host, Kind: w.Kind, State: w.State})
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	st := Status{
-		PID: os.Getpid(), Home: config.Home(), HTTPPort: d.cfg.HTTPPort,
+		Workers: workers,
+		PID:     os.Getpid(), Home: config.Home(), HTTPPort: d.cfg.HTTPPort,
 		PHP: d.defaultPHP, WebServer: "Caddy " + caddyVersion(), UserHome: userHome(), SitesDir: d.cfg.SitesDir, SitesDirs: d.cfg.SitesDirs(), Folders: d.cfg.Folders(), Theme: d.cfg.Theme, Editor: d.editorName(),
 		Dev: []DevStatus{}, DevAuto: d.cfg.DevAuto,
 		Sites: d.sites, HostsStale: d.hostsStale, Notes: append(append([]string{}, d.skipped...), d.notes...),

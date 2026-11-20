@@ -1017,25 +1017,7 @@ func (d *daemon) workerRoutes(mux *http.ServeMux) {
 	}
 	// The switched-on workers of current sites.
 	mux.HandleFunc("GET /api/workers", func(w http.ResponseWriter, r *http.Request) {
-		type job struct{ kind, host string }
-		var on []job
-		d.mu.Lock()
-		for _, s := range d.sites {
-			if s.App != "" {
-				continue
-			}
-			for _, kind := range []string{workerQueue, workerReverb} {
-				if d.switchedOn(kind, s.Name) {
-					on = append(on, job{kind, s.Host})
-				}
-			}
-		}
-		d.mu.Unlock()
-		list := []WorkerStatus{}
-		for _, j := range on {
-			list = append(list, d.workerState(j.kind, j.host))
-		}
-		writeJSON(w, list)
+		writeJSON(w, d.switchedOnWorkers())
 	})
 	mux.HandleFunc("POST /api/workers/{kind}/switch", func(w http.ResponseWriter, r *http.Request) {
 		kind, ok := kindOf(w, r)
@@ -1190,4 +1172,36 @@ func (d *daemon) workerRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, reply)
 	})
+}
+
+// WorkerBrief is a switched-on worker as Home lists it.
+type WorkerBrief struct {
+	Host  string `json:"host"`
+	Kind  string `json:"kind"`
+	State string `json:"state"`
+}
+
+// switchedOnWorkers lists the switched-on workers of the current sites
+// (laman's apps left out), in site order, the queue before Reverb. Call it
+// without d.mu held: workerState takes it.
+func (d *daemon) switchedOnWorkers() []WorkerStatus {
+	type job struct{ kind, host string }
+	var on []job
+	d.mu.Lock()
+	for _, s := range d.sites {
+		if s.App != "" {
+			continue
+		}
+		for _, kind := range []string{workerQueue, workerReverb} {
+			if d.switchedOn(kind, s.Name) {
+				on = append(on, job{kind, s.Host})
+			}
+		}
+	}
+	d.mu.Unlock()
+	list := []WorkerStatus{}
+	for _, j := range on {
+		list = append(list, d.workerState(j.kind, j.host))
+	}
+	return list
 }

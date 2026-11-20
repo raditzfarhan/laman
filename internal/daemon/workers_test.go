@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1059,4 +1060,33 @@ func TestWorkerRestartRouteStillStopping(t *testing.T) {
 	w.mu.Lock()
 	w.pid = 0 // nothing for cleanup to kill
 	w.mu.Unlock()
+}
+
+func TestStatusListsWorkers(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	f.setSwitch(workerReverb, false)
+	f.d.sites = append(f.d.sites,
+		sites.Site{Name: "shop", Host: "shop.test", Path: t.TempDir()},
+		sites.Site{Name: "adminer", Host: "adminer.test", Path: t.TempDir(), App: "adminer"})
+	f.d.cfg.Reverb["adminer"] = true    // an app site: never listed
+	f.d.cfg.QueueWorkers["gone"] = true // a site that is no longer there
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	got := f.d.status().Workers
+	want := []WorkerBrief{{Host: "acme.test", Kind: workerQueue, State: workerRunning}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("workers = %+v, want %+v", got, want)
+	}
+	b, _ := json.Marshal(f.d.status())
+	if !strings.Contains(string(b), `"workers":[{"host":"acme.test","kind":"queue","state":"running"}]`) {
+		t.Errorf("status JSON: %s", b)
+	}
+
+	f.setSwitch(workerQueue, false)
+	f.d.stopWorker(workerQueue, "acme.test")
+	b, _ = json.Marshal(f.d.status())
+	if !strings.Contains(string(b), `"workers":[]`) {
+		t.Errorf("status JSON with none on: %s", b)
+	}
 }
