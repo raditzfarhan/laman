@@ -96,7 +96,9 @@ func cmdWorker(kind string, args []string) error {
 			return err
 		}
 		var w daemon.WorkerStatus
-		_ = json.Unmarshal(b, &w)
+		if err := json.Unmarshal(b, &w); err != nil {
+			return err
+		}
 		fmt.Printf("Restarted %s's %s.\n", s.Host, label)
 		printWorker(w)
 	case "status":
@@ -237,6 +239,7 @@ func envHint(r reverbFact) {
 func reverbAddress(host string) {
 	_, r, err := siteWorkers(host)
 	if err != nil {
+		fmt.Printf("(could not read the address: %v)\n", err)
 		return
 	}
 	if r.URL != "" {
