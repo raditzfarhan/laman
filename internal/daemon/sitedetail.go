@@ -191,6 +191,7 @@ func (d *daemon) forgetGoneSizes() {
 
 func (d *daemon) siteDetailRoutes(mux *http.ServeMux) {
 	d.siteInstallRoutes(mux)
+	d.envRoutes(mux)
 	mux.HandleFunc("GET /api/sites/detail", func(w http.ResponseWriter, r *http.Request) {
 		host := r.URL.Query().Get("site")
 		s, ok := d.siteByHost(host)
