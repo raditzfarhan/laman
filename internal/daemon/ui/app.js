@@ -1384,7 +1384,7 @@ function envAskYes(st) {
   const ask = st.ask;
   st.ask = null;
   if (ask.kind === "leave") {
-    delete envState[st.host];
+    envDrop(st.host);
     location.hash = ask.to;
     return;
   }
@@ -1464,7 +1464,7 @@ async function envAfter(st, r, msg, keep, raw) {
   alertNote(msg, "note info");
   if (!keep) envClear(st);
   st.raw = raw || null; // the raw text is the file's again, or read anew when Raw opens
-  if (!st.raw && st.tab === "raw") envRawLoad(st);
+  if (!st.raw && st.rawSeen && st.tab === "raw") envRawLoad(st);
   if (st.backupsOpen) envBackupsLoad(st);
   await envLoad(st.host, keep);
   loadDetail(); // DB, Redis, mail and queue may point elsewhere now
@@ -1616,6 +1616,13 @@ async function envRestore(st, b) {
 // are stopped before they navigate; anything else (Back, a typed address)
 // is put back and asked about.
 let envHash = location.hash;
+// Forgets a site's section: its state, and its node with any revealed values.
+// The site page must redraw on the next visit to mount a fresh one.
+function envDrop(host) {
+  envState[host]?.node.remove();
+  delete envState[host];
+  delete drawn.site;
+}
 const envHostOf = (hash) => {
   if (!hash.startsWith("#site/")) return "";
   try { return decodeURIComponent(hash.slice(6)); } catch { return ""; }
@@ -1630,7 +1637,7 @@ function envGuard() {
       envAsk(st, { kind: "leave", to: now || "#home" });
       return true;
     }
-    delete envState[host]; // the next visit reads the file again; revealed values are forgotten
+    envDrop(host); // the next visit reads the file again; revealed values are forgotten
   }
   envHash = now;
   return false;
