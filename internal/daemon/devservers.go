@@ -46,8 +46,8 @@ type devServer struct {
 	pid     int
 	cmdline string
 	since   time.Time
-	stop    bool     // Stop was asked for: an exit is not a crash
-	tail    []string // last lines of output, colour codes removed
+	stop    bool       // Stop was asked for: an exit is not a crash
+	tail    outputTail // last lines of output, colour codes removed
 }
 
 // DevStatus is a dev server as the dashboard and `laman dev` see it.
@@ -76,11 +76,37 @@ func (s *devServer) status() DevStatus {
 
 func (s *devServer) addLine(line string) {
 	s.mu.Lock()
-	s.tail = append(s.tail, line)
-	if len(s.tail) > devTailLines {
-		s.tail = s.tail[len(s.tail)-devTailLines:]
-	}
+	s.tail.add(line)
 	s.mu.Unlock()
+}
+
+// outputTail holds the last devTailLines lines of a process's output, for
+// dev servers and workers alike. Its owner's mutex guards it.
+type outputTail []string
+
+func (t *outputTail) add(line string) {
+	*t = append(*t, line)
+	if len(*t) > devTailLines {
+		*t = (*t)[len(*t)-devTailLines:]
+	}
+}
+
+// writeLogHeader starts a process's log with when, where and what runs.
+func writeLogHeader(out io.Writer, dir, line string) {
+	fmt.Fprintf(out, "[laman %s] %s> %s\n", time.Now().Format(time.RFC3339), dir, line)
+}
+
+// scanOutput reads a process's output line by line, colour codes removed,
+// writing each line to out and handing it to each, then drains the rest.
+func scanOutput(r io.Reader, out io.Writer, each func(line string)) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() {
+		line := strings.TrimRight(ansi.ReplaceAllString(sc.Text(), ""), "\r ")
+		io.WriteString(out, line+"\n")
+		each(line)
+	}
+	io.Copy(io.Discard, r)
 }
 
 func tailLines(lines []string, n int) string {
@@ -183,7 +209,7 @@ func (d *daemon) startDev(host string) error {
 	}
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
-	fmt.Fprintf(out, "[laman %s] %s> %s\n", time.Now().Format(time.RFC3339), site.Path, line)
+	writeLogHeader(out, site.Path, line)
 	if cfg, err := config.Load(); err == nil {
 		if v, from := cfg.NodeFor(site.Path); from != "" {
 			fmt.Fprintf(out, "[laman] Node %s (from %s)\n", v, from)
@@ -304,12 +330,8 @@ var (
 
 func (d *daemon) readDevOutput(s *devServer, r io.Reader, out *os.File) {
 	defer out.Close()
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	seenURL := false
-	for sc.Scan() {
-		line := strings.TrimRight(ansi.ReplaceAllString(sc.Text(), ""), "\r ")
-		out.WriteString(line + "\n")
+	scanOutput(r, out, func(line string) {
 		s.addLine(line)
 		if !seenURL {
 			if m := localURL.FindStringSubmatch(line); m != nil {
@@ -323,8 +345,7 @@ func (d *daemon) readDevOutput(s *devServer, r io.Reader, out *os.File) {
 				}
 			}
 		}
-	}
-	io.Copy(io.Discard, r)
+	})
 }
 
 // waitDevReady marks the server running once its port answers, which is

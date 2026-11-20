@@ -1031,3 +1031,19 @@ func TestWorkerPidReservedUntilKillDone(t *testing.T) {
 		t.Errorf("pid %d still held after the stop was done", pid)
 	}
 }
+
+func TestWorkerRestartRouteStillStopping(t *testing.T) {
+	f, mux, _ := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=sqs\n")
+	f.setSwitch(workerQueue, true)
+	workerStopWait = 50 * time.Millisecond
+	// A run whose exit never arrives (no such process, done never closed).
+	w := &worker{kind: workerQueue, site: f.d.sites[0], gen: 1, state: workerRunning, pid: 0x7ffffff0, done: make(chan struct{})}
+	f.d.workers = map[string]*worker{workerKey(workerQueue, "acme.test"): w}
+	rec := call(mux, "POST", "/api/workers/queue/restart", `{"site":"acme.test"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "queue for acme.test is still stopping") {
+		t.Errorf("restart: %d %s", rec.Code, rec.Body)
+	}
+	w.mu.Lock()
+	w.pid = 0 // nothing for cleanup to kill
+	w.mu.Unlock()
+}

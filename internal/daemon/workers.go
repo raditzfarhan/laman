@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -101,7 +100,7 @@ type worker struct {
 	timer   *time.Timer   // a pending restart
 	done    chan struct{} // closed when the running process has exited
 	crashes []time.Time
-	tail    []string
+	tail    outputTail
 }
 
 // WorkerStatus is a worker as the dashboard sees it.
@@ -138,12 +137,7 @@ func (w *worker) addLine(line string) {
 	w.mu.Unlock()
 }
 
-func (w *worker) addLineLocked(line string) {
-	w.tail = append(w.tail, line)
-	if len(w.tail) > devTailLines {
-		w.tail = w.tail[len(w.tail)-devTailLines:]
-	}
-}
+func (w *worker) addLineLocked(line string) { w.tail.add(line) }
 
 // current reports whether a start of generation gen may still change w:
 // no stop was asked for and no newer start replaced it. Callers hold w.mu.
@@ -346,7 +340,7 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 	}
 	cmd.Stdout, cmd.Stderr = pw, pw
 	cmd.WaitDelay = workerOutputWait // only matters if a command brings its own writer
-	fmt.Fprintf(out, "[laman %s] %s> %s\n", time.Now().Format(time.RFC3339), site.Path, line)
+	writeLogHeader(out, site.Path, line)
 
 	// Start under w.mu so a stop either sees the pid or stops this start.
 	w.mu.Lock()
@@ -510,14 +504,7 @@ func waitText(d time.Duration) string {
 func readWorkerOutput(w *worker, r, out *os.File) {
 	defer out.Close()
 	defer r.Close()
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimRight(ansi.ReplaceAllString(sc.Text(), ""), "\r ")
-		out.WriteString(line + "\n")
-		w.addLine(line)
-	}
-	io.Copy(io.Discard, r)
+	scanOutput(r, out, w.addLine)
 }
 
 func serviceOffMsg(kind string) string {
@@ -667,10 +654,13 @@ func (w *worker) stoppedState() string {
 	return workerStopped
 }
 
+// errStillStopping: a restart gave up waiting for the old process to exit.
+var errStillStopping = errors.New("still stopping")
+
 // restartWorker stops and starts a worker, e.g. after code changes.
 func (d *daemon) restartWorker(kind, host string) error {
 	if !d.stopWorkerWait(kind, host) {
-		return fmt.Errorf("%s for %s is still stopping", kind, host)
+		return fmt.Errorf("%s for %s is %w", kind, host, errStillStopping)
 	}
 	return d.startWorker(kind, host)
 }
@@ -1156,11 +1146,12 @@ func (d *daemon) workerRoutes(mux *http.ServeMux) {
 			fail(w, http.StatusBadRequest, "the %s worker is off for %s", kind, s.Host)
 			return
 		}
-		if !d.stopWorkerWait(kind, s.Host) {
-			fail(w, http.StatusConflict, "%s for %s is still stopping", kind, s.Host)
-			return
-		}
-		if err := d.startWorker(kind, s.Host); err != nil {
+		if err := d.restartWorker(kind, s.Host); err != nil {
+			if errors.Is(err, errStillStopping) {
+				fail(w, http.StatusConflict, "%v", err)
+				return
+			}
+			// A failed start shows in the state (crashed, with the error).
 			logf("restart %s worker for %s: %v", kind, s.Host, err)
 		}
 		writeJSON(w, d.workerState(kind, s.Host))
