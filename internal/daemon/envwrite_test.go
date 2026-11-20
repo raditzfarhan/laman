@@ -53,3 +53,36 @@ func TestEnvMismatch(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestWriteEnvKeysNoChangeKeepsBackup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	orig := "A=1\nREVERB_HOST=old\n"
+	os.WriteFile(path, []byte(orig), 0o644)
+	kvs := []envKV{{"REVERB_HOST", "acme.test"}}
+	if err := writeEnvKeys(path, kvs); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEnvKeys(path, kvs); err != nil {
+		t.Fatal(err)
+	}
+	bak, _ := os.ReadFile(path + ".laman-backup")
+	if string(bak) != orig {
+		t.Fatalf("backup %q", bak)
+	}
+}
+
+func TestWriteEnvKeysRefusesBareCR(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	orig := "A=1\rB=2\r\nC=3\n"
+	os.WriteFile(path, []byte(orig), 0o644)
+	if err := writeEnvKeys(path, []envKV{{"A", "9"}}); err == nil {
+		t.Fatal("want error")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != orig {
+		t.Fatalf("file changed: %q", got)
+	}
+	if _, err := os.Stat(path + ".laman-backup"); err == nil {
+		t.Fatal("backup written")
+	}
+}

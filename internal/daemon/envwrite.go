@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -69,9 +70,14 @@ func writeEnvKeys(path string, kvs []envKV) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path+".laman-backup", orig, 0o644); err != nil {
+	if strings.Contains(strings.ReplaceAll(string(orig), "\r\n", ""), "\r") {
+		return errors.New("unusual line endings in .env; edit it by hand")
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
 		return err
 	}
+	perm := fi.Mode().Perm()
 	eol := "\n"
 	if strings.Contains(string(orig), "\r\n") {
 		eol = "\r\n"
@@ -99,12 +105,23 @@ func writeEnvKeys(path string, kvs []envKV) error {
 		lines = append(lines, kv.Key+"="+kv.Value+eol)
 	}
 
+	out := strings.Join(lines, "")
+	if out == string(orig) {
+		return nil
+	}
+	if err := os.WriteFile(path+".laman-backup", orig, perm); err != nil {
+		return err
+	}
+	if err := os.Chmod(path+".laman-backup", perm); err != nil {
+		return err
+	}
+
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".env.laman-*")
 	if err != nil {
 		return err
 	}
 	name := tmp.Name()
-	_, werr := tmp.WriteString(strings.Join(lines, ""))
+	_, werr := tmp.WriteString(out)
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
@@ -112,8 +129,9 @@ func writeEnvKeys(path string, kvs []envKV) error {
 		os.Remove(name)
 		return werr
 	}
-	if fi, err := os.Stat(path); err == nil {
-		os.Chmod(name, fi.Mode().Perm())
+	if err := os.Chmod(name, perm); err != nil {
+		os.Remove(name)
+		return err
 	}
 	if err := os.Rename(name, path); err != nil {
 		os.Remove(name)
