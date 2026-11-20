@@ -831,9 +831,11 @@ function workerRow(s, kind, w) {
   const note = w.note || st.note;
   if (queue && note) subs.push(el("span", { class: "muted" }, note));
   // queue:listen loads the code per job (also for Horizon projects); Reverb keeps it in memory.
+  if (!queue && !installed) subs.push(el("span", { class: "muted" }, "To use Reverb: run ",
+    el("code", {}, "laman php artisan install:broadcasting --reverb"), " in the project, then switch this on, click Set up .env and restart Vite."));
   if (w.on && !queue) subs.push(el("span", { class: "muted" }, "Restart after code changes: it keeps your code in memory."));
   if (!queue && w.on) {
-    if (w.needsInstall) subs.push(el("span", { class: "wk-env" }, "Run ", el("code", {}, "php artisan reverb:install"), " first"));
+    if (w.needsInstall) subs.push(el("span", { class: "wk-env" }, "Run ", el("code", {}, "laman php artisan install:broadcasting --reverb"), " first"));
     else if (w.envOK) subs.push(el("span", { class: "wk-env ok" }, ".env ✓ set up for laman"));
     else if (w.url) subs.push(el("span", { class: "wk-env warn", title: (w.envMismatch || []).join(", ") }, ".env points elsewhere",
       el("button", { class: "inline", disabled: busy, title: `Write the Reverb lines in ${host}'s .env (the old one is first copied to laman's data folder): ${(w.envMismatch || []).join(", ")}`,

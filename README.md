@@ -320,12 +320,31 @@ laman queue on|off|restart|status|log [site]          # the queue worker (defaul
 laman reverb on|off|restart|status|log|env [site]     # Reverb; env sets up the site's .env for it
 ```
 
+### Quick start: Reverb in a Laravel project
+
+1. **Add Reverb to the project** (once, the normal Laravel step). It adds the package, the Reverb keys in `.env`, `routes/channels.php` and Echo in `resources/js/echo.js`:
+   ```
+   laman php artisan install:broadcasting --reverb
+   ```
+2. **Use a real queue.** Broadcast events go through the queue, so `QUEUE_CONNECTION` in `.env` must be `database` or `redis`, not `sync`.
+3. **Switch both on.** On the site's page in the dashboard, turn on **Queue worker** and **Reverb**, or in the project folder:
+   ```
+   laman queue on
+   laman reverb on
+   ```
+4. **Point `.env` at laman.** Click **Set up .env** on the Reverb row, or run `laman reverb env`.
+5. **Restart Vite** (`npm run dev`) or run `npm run build`, so the browser gets the new values.
+
+That's it: pages connect to `wss://<site>.test/app`, and events you broadcast reach them. Both switches are remembered, so the workers start whenever laman starts. Click **Restart** on the Reverb row after changing code it uses.
+
+### Details
+
 - **In the dashboard:** a Laravel site's page (click its name on Home) has a **Workers** section: one row per worker with its switch, state and uptime, what it runs, **Restart** and **Log** (the last lines of output). The page suggests a switch when it sees one would help: a `.env` that queues jobs, or `laravel/reverb` in `composer.json`. The **Queues** view marks a queue with waiting jobs and no worker as **No worker running**, linking to the site's page.
 - **The queue worker** runs `php artisan queue:listen --tries=1 --timeout=0` (the flags of Laravel's own `composer run dev`) with the site's PHP, in the project folder. `queue:listen` rather than `queue:work` because it loads your code fresh for every job, so edits apply without a restart. It runs the default queue of the default connection. With `QUEUE_CONNECTION=sync` (or `null`) jobs run inline and the switch stays off.
 - **Horizon** needs `pcntl`/`posix`, which PHP on Windows doesn't have, so for a project with `laravel/horizon` laman runs `queue:listen` instead, on the queues named in `config/horizon.php` when it can read them. The row says so.
 - **Needs a server:** a worker whose queue is in laman's Redis, MariaDB or PostgreSQL waits while that server is off (**waiting · Redis is off**) and starts by itself when it comes up.
 - **Reverb** runs `php artisan reverb:start` on a port laman gives the site (8100–8199, kept from then on), and Caddy sends the Pusher paths (`/app`, `/app/*`, `/apps/*`) on the site's own address to it. Browsers connect to `wss://<site>.test/app` (or `ws://` without HTTPS), the same origin as the page, as in production. A route of your own under `/app` doesn't work while Reverb is on.
-- **Set up .env:** **Set up .env** on the Reverb row, or `laman reverb env`, writes `BROADCAST_CONNECTION=reverb` and the `REVERB_HOST/PORT/SCHEME`, `REVERB_SERVER_HOST/PORT` and `VITE_REVERB_HOST/PORT/SCHEME` lines laman needs. PHP is pointed straight at the Reverb process (`REVERB_HOST=127.0.0.1`, `REVERB_PORT=<Reverb's port>`, `REVERB_SCHEME=http`, the same as `REVERB_SERVER_*`), because PHP does not trust laman's local CA and would fail with a cURL error 60 over https; only the browser-side `VITE_REVERB_*` lines use the site's address (host, https port and scheme). It changes those lines in place and adds missing ones at the end; it leaves everything else, including `REVERB_APP_ID/KEY/SECRET`, untouched. The `.env` as it was is saved first to `~/.laman/data/env-backups/<site>.env` (overwritten each time; laman writes nothing else into the project). Run `php artisan reverb:install` first if the project has no Reverb keys yet. Afterwards, restart Vite (`npm run dev`) or rebuild so the browser gets the new values, and run `php artisan config:clear` if the config is cached. The Reverb row shows **.env ✓ set up for laman**, or **.env points elsewhere** when the values differ.
+- **Set up .env:** **Set up .env** on the Reverb row, or `laman reverb env`, writes `BROADCAST_CONNECTION=reverb` and the `REVERB_HOST/PORT/SCHEME`, `REVERB_SERVER_HOST/PORT` and `VITE_REVERB_HOST/PORT/SCHEME` lines laman needs. PHP is pointed straight at the Reverb process (`REVERB_HOST=127.0.0.1`, `REVERB_PORT=<Reverb's port>`, `REVERB_SCHEME=http`, the same as `REVERB_SERVER_*`), because PHP does not trust laman's local CA and would fail with a cURL error 60 over https; only the browser-side `VITE_REVERB_*` lines use the site's address (host, https port and scheme). It changes those lines in place and adds missing ones at the end; it leaves everything else, including `REVERB_APP_ID/KEY/SECRET`, untouched. The `.env` as it was is saved first to `~/.laman/data/env-backups/<site>.env` (overwritten each time; laman writes nothing else into the project). Run `laman php artisan install:broadcasting --reverb` first if the project has no Reverb keys yet. Afterwards, restart Vite (`npm run dev`) or rebuild so the browser gets the new values, and run `php artisan config:clear` if the config is cached. The Reverb row shows **.env ✓ set up for laman**, or **.env points elsewhere** when the values differ.
 - **Staying up:** a worker that exits is started again after 2 s, then 4, 8, 16 and 30 s. After 5 quick crashes in 2 minutes laman stops trying and shows **crashed** with the last output. Switched-on workers start with laman and stop with it; stopping ends the whole process tree.
 - **Code changes:** Reverb (and anything else that keeps your code in memory) needs **Restart** after you change the code. Changing the site's PHP version or setting up `.env` restarts its running workers.
 - **Logs:** `~/.laman/logs/queue-<site>.log` and `reverb-<site>.log`.
