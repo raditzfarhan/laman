@@ -972,12 +972,16 @@ func (d *daemon) setupReverbEnv(s sites.Site) (reverbEnvReply, error) {
 	changed := envMismatch(vals, want)
 	backup := ""
 	if len(changed) > 0 {
-		wrote, err := writeEnvKeys(filepath.Join(s.Path, ".env"), envBackupPath(s.Name), want)
+		sets := make([]envChange, len(want))
+		for i, kv := range want {
+			sets[i] = envChange{"set", kv.Key, kv.Value}
+		}
+		saved, err := d.writeEnv(s, "", func(o string) (string, error) { return applyEnvChanges(o, sets) })
 		if err != nil {
 			return reverbEnvReply{}, err
 		}
-		if wrote {
-			backup = envBackupPath(s.Name)
+		if saved.Changed {
+			backup = filepath.Join(envBackupDir(s.Name), saved.Backup+".env")
 		}
 		if err := d.restartSiteWorkers(s.Name); err != nil {
 			logf("restarting workers of %s after its .env changed: %v", s.Host, err)

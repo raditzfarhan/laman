@@ -754,7 +754,7 @@ func TestReverbEnvRouteNeedsKey(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(f.dir, ".env")); string(b) != env {
 		t.Errorf(".env changed: %q", b)
 	}
-	if exists(envBackupPath("acme")) {
+	if exists(envBackupDir("acme")) {
 		t.Errorf("backup written")
 	}
 }
@@ -789,11 +789,10 @@ func TestReverbEnvRouteWrites(t *testing.T) {
 	if len(reply.Changed) != 9 || reply.ConfigCached {
 		t.Errorf("reply = %+v", reply)
 	}
-	want := filepath.Join(config.DataDir(), "env-backups", "acme.env")
-	if reply.Backup != want {
-		t.Errorf("reply backup = %q, want %q", reply.Backup, want)
+	if filepath.Dir(reply.Backup) != filepath.Join(config.DataDir(), "env-backups", "acme") || filepath.Ext(reply.Backup) != ".env" {
+		t.Errorf("reply backup = %q, want a file under env-backups/acme", reply.Backup)
 	}
-	if b, _ := os.ReadFile(want); !strings.Contains(string(b), "REVERB_PORT=443\n") {
+	if b, _ := os.ReadFile(reply.Backup); !strings.Contains(string(b), "REVERB_PORT=443\n") {
 		t.Errorf("backup = %q, want the .env before the write", b)
 	}
 	// Nothing new in the project besides .env itself.

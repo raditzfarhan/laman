@@ -111,8 +111,9 @@ type daemon struct {
 	raw      []sites.Site
 
 	mu         sync.Mutex
-	pools      map[string]*pool // by PHP version
-	sites      []sites.Site     // with PHP versions filled in
+	envLocks   map[string]*sync.Mutex // one per site name; see envLock
+	pools      map[string]*pool       // by PHP version
+	sites      []sites.Site           // with PHP versions filled in
 	defaultPHP string
 	notes      []string // problems worth showing in `laman status`
 	hostsStale bool

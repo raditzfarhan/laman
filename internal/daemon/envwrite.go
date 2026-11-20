@@ -2,13 +2,9 @@ package daemon
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"laman/internal/config"
 )
 
 // The only place laman edits a file of the user's project: it sets the
@@ -148,71 +144,4 @@ func rewriteEnvLine(line, value string) string {
 		tail = " " + tail
 	}
 	return prefix + enc + tail + eol
-}
-
-// writeEnvKeys sets each key in path in place (see applyEnvChanges), appends
-// missing keys, and writes the result atomically. Every other byte is kept.
-// When that changes the file, the file as it was is first copied to backup
-// (overwriting it, with the file's permission bits); wrote reports whether it
-// changed.
-func writeEnvKeys(path, backup string, kvs []envKV) (wrote bool, err error) {
-	orig, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return false, err
-	}
-	perm := fi.Mode().Perm()
-	changes := make([]envChange, len(kvs))
-	for i, kv := range kvs {
-		changes[i] = envChange{"set", kv.Key, kv.Value}
-	}
-	out, err := applyEnvChanges(string(orig), changes)
-	if err != nil {
-		return false, err
-	}
-	if out == string(orig) {
-		return false, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-		return false, err
-	}
-	if err := os.WriteFile(backup, orig, perm); err != nil {
-		return false, err
-	}
-	if err := os.Chmod(backup, perm); err != nil {
-		return false, err
-	}
-
-	// Next to .env so the rename is atomic; it becomes .env (or is removed).
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".env.laman-*")
-	if err != nil {
-		return false, err
-	}
-	name := tmp.Name()
-	_, werr := tmp.WriteString(out)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		os.Remove(name)
-		return false, werr
-	}
-	if err := os.Chmod(name, perm); err != nil {
-		os.Remove(name)
-		return false, err
-	}
-	if err := os.Rename(name, path); err != nil {
-		os.Remove(name)
-		return false, err
-	}
-	return true, nil
-}
-
-// envBackupPath is where laman keeps a site's .env as it was before laman's
-// last change to it: in laman's data folder, not in the project.
-func envBackupPath(name string) string {
-	return filepath.Join(config.DataDir(), "env-backups", name+".env")
 }
