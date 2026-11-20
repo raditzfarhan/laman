@@ -232,3 +232,41 @@ func TestNodeProxyAndNoticeSites(t *testing.T) {
 		t.Fatalf("adapt: %v\n%s", err, out)
 	}
 }
+
+func TestReverbRoute(t *testing.T) {
+	in := input()
+	in.Sites = []sites.Site{{Name: "acme", Host: "acme.test", Path: `C:\Sites\acme`, Root: `C:\Sites\acme\public`, Front: true},
+		{Name: "blog", Host: "blog.test", Path: `C:\Sites\blog`, Root: `C:\Sites\blog\public`, Front: true}}
+	in.Certs = map[string]Cert{"acme.test": {Crt: `C:\c\a.crt`, Key: `C:\c\a.key`}}
+	in.ReverbPorts = map[string]int{"acme.test": 8101}
+	in.Shares = []Share{{Host: "acme.test", Port: 9901}}
+	out := Render(in)
+	route := "reverse_proxy @reverb 127.0.0.1:8101"
+	for _, head := range []string{"http://acme.test:80 {", "https://acme.test:443 {"} {
+		i := strings.Index(out, head)
+		if i < 0 {
+			t.Fatalf("no %s block:\n%s", head, out)
+		}
+		b := out[i:]
+		b = b[:strings.Index(b, "\n}\n")]
+		r, f := strings.Index(b, route), strings.Index(b, "php_fastcgi")
+		if r < 0 || f < 0 || r > f || !strings.Contains(b, "@reverb path /app /app/* /apps/*") {
+			t.Errorf("%s: route missing or after php_fastcgi:\n%s", head, b)
+		}
+	}
+	if n := strings.Count(out, "@reverb"); n != 4 {
+		t.Errorf("want the route in the two acme blocks only (4 mentions), got %d:\n%s", n, out)
+	}
+	if strings.Contains(out[strings.Index(out, "http://:9901 {"):], "@reverb path /app /app/* /apps/*\n\treverse_proxy @reverb 127.0.0.1:8101\n\troot") {
+		t.Error("share block has the route")
+	}
+	js, err := Adapt(out)
+	if err != nil {
+		t.Fatalf("adapt: %v", err)
+	}
+	s := string(js)
+	r, f := strings.Index(s, "127.0.0.1:8101"), strings.Index(s, "fastcgi")
+	if r < 0 || f < 0 || r > f {
+		t.Errorf("adapted routes: reverb upstream missing or after fastcgi (r=%d f=%d)", r, f)
+	}
+}

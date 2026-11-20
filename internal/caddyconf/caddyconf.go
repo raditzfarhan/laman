@@ -30,6 +30,9 @@ type Input struct {
 	// DevPorts: the port of each running dev server, by host. A Node site
 	// without one shows its notice page (stopped, starting, crashed).
 	DevPorts map[string]int
+	// ReverbPorts: the port of each site's Reverb server, by host. PHP sites
+	// listed here forward websocket paths to it.
+	ReverbPorts map[string]int
 	// DomainPort: where the user's own-domain tunnel delivers requests;
 	// shares with a Hostname are routed there by host name. 0 when off.
 	DomainPort int
@@ -153,7 +156,7 @@ func Render(in Input) string {
 	}
 
 	// siteBody serves one site; env is handed to its PHP as server variables.
-	siteBody := func(s sites.Site, env map[string]string) func() {
+	siteBody := func(s sites.Site, env map[string]string, reverb bool) func() {
 		return func() {
 			switch s.Kind {
 			case sites.KindProxy:
@@ -177,6 +180,10 @@ func Render(in Input) string {
 			w("\t\tnot path /.well-known/*")
 			w("\t}")
 			w("\trespond @hidden 403")
+			if port, ok := in.ReverbPorts[s.Host]; ok && reverb {
+				w("\t@reverb path /app /app/* /apps/*")
+				w("\treverse_proxy @reverb 127.0.0.1:%d", port)
+			}
 			w("\tphp_fastcgi %s {", upstreamsFor(s.Host))
 			if !s.Front {
 				// No front controller: only real .php files go to PHP, so
@@ -200,7 +207,7 @@ func Render(in Input) string {
 	}
 
 	for _, s := range in.Sites {
-		site := siteBody(s, in.SiteEnv[s.Host])
+		site := siteBody(s, in.SiteEnv[s.Host], true)
 		w("")
 		if s.PHP != "" {
 			w("# %s -> %s (PHP %s)", s.Host, filepath.ToSlash(s.Path), s.PHP)
@@ -230,7 +237,7 @@ func Render(in Input) string {
 				}
 				addr = fmt.Sprintf("http://%s:%d", sh.Hostname, in.DomainPort)
 			}
-			block(addr, nil, siteBody(s, map[string]string{"HTTPS": "on"}))
+			block(addr, nil, siteBody(s, map[string]string{"HTTPS": "on"}, false))
 		}
 	}
 	if in.DomainPort > 0 {

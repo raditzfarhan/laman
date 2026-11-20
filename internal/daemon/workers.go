@@ -834,3 +834,25 @@ func (d *daemon) watchServicePort(kind string) {
 		}
 	}()
 }
+
+// reverbPorts: the Reverb port of each site that has Reverb switched on, by
+// host, for Caddy. Whether its server is running does not matter.
+func (d *daemon) reverbPorts() map[string]int {
+	d.mu.Lock()
+	list := d.sites
+	d.mu.Unlock()
+	return d.reverbPortsFor(list)
+}
+
+// reverbPortsFor is reverbPorts for a site list not yet stored in d.sites.
+func (d *daemon) reverbPortsFor(list []sites.Site) map[string]int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := map[string]int{}
+	for _, s := range list {
+		if p := d.cfg.ReverbPorts[s.Name]; d.cfg.Reverb[s.Name] && p > 0 {
+			out[s.Host] = p
+		}
+	}
+	return out
+}

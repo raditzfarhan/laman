@@ -588,6 +588,7 @@ func (d *daemon) refresh() error {
 		}
 	}
 	in.DevPorts = d.devPorts()
+	in.ReverbPorts = d.reverbPortsFor(list)
 
 	conf := caddyconf.Render(in)
 	if conf != d.applied || certsChanged {

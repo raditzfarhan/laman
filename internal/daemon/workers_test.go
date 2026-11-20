@@ -550,3 +550,14 @@ func TestQueueWaitsForServicePort(t *testing.T) {
 		t.Errorf("starts = %d, want 1", n)
 	}
 }
+
+func TestReverbPorts(t *testing.T) {
+	d := &daemon{cfg: config.Default(), sites: []sites.Site{
+		{Name: "acme", Host: "acme.test"}, {Name: "blog", Host: "blog.test"}, {Name: "shop", Host: "shop.test"}}}
+	d.cfg.Reverb = map[string]bool{"acme": true, "blog": true}
+	d.cfg.ReverbPorts = map[string]int{"acme": 8101, "blog": 0, "shop": 8103}
+	got := d.reverbPorts()
+	if len(got) != 1 || got["acme.test"] != 8101 {
+		t.Fatalf("reverbPorts = %v, want only acme.test:8101", got)
+	}
+}
