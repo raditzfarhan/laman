@@ -176,6 +176,7 @@ function draw(force) {
   // Dev server uptimes and output change every poll; they are updated in
   // place below so the rows (and their buttons) stay put.
   const devShape = (status.dev || []).map(({ uptime, ...rest }) => rest);
+  if (!(status.workers || []).length) workersOnly = false; // before drawing: "Show" with none left would list nothing
   if (changed("sites", [ownSites, status.php, installed, status.httpsPort, status.httpsTrusted, status.httpPort, shares, opening, copied, shareOpts,
     status.shareDomain, shareCfg?.pattern, status.folders, status.editor, siteQuery(), [...folded], devShape, status.devAuto, [...devOpen], devBusy, devAsk, flashSite, status.workers, workersOnly])) renderSites(ownSites, installed, shares);
   if (changed("wkbar", [status.workers, workersOnly, stopAllAsk, stopAllBusy])) renderWorkerBar();
