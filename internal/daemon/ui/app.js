@@ -410,6 +410,11 @@ const LINE_ICONS = {
   stack: "<path d=\"M12 4l-8 4l8 4l8 -4l-8 -4\" /><path d=\"M4 12l8 4l8 -4\" /><path d=\"M4 16l8 4l8 -4\" />",
   box: "<path d=\"M12 3l8 4.5l0 9l-8 4.5l-8 -4.5l0 -9l8 -4.5\" /><path d=\"M12 12l8 -4.5\" /><path d=\"M12 12l0 9\" /><path d=\"M12 12l-8 -4.5\" />",
   back: "<path d=\"M15 6l-6 6l6 6\" />",
+  eye: "<path d=\"M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0\" /><path d=\"M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6\" />",
+  eyeOff: "<path d=\"M10.585 10.587a2 2 0 0 0 2.829 2.828\" /><path d=\"M16.681 16.673a8.717 8.717 0 0 1 -4.681 1.327c-3.6 0 -6.6 -2 -9 -6c1.272 -2.12 2.712 -3.678 4.32 -4.674m2.86 -1.146a9.055 9.055 0 0 1 1.82 -.18c3.6 0 6.6 2 9 6c-.666 1.11 -1.379 2.067 -2.138 2.87\" /><path d=\"M3 3l18 18\" />",
+  pencil: "<path d=\"M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4\" /><path d=\"M13.5 6.5l4 4\" />",
+  trash: "<path d=\"M4 7l16 0\" /><path d=\"M10 11l0 6\" /><path d=\"M14 11l0 6\" /><path d=\"M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12\" /><path d=\"M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3\" />",
+  check: "<path d=\"M5 12l5 5l10 -10\" />",
   inbox: "<path d=\"M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z\" /><path d=\"M4 13h3l3 3h4l3 -3h3\" />",
 };
 const BRAND_ICONS = {
@@ -786,7 +791,15 @@ function renderSiteDetail(installed, shares, qrows) {
   const job = vers?.job || {};
   const ours = siteJobHost === s.host || (job.running && (job.message || "").includes(` for ${s.host}`));
   const jobLine = el("p", { class: "job" + (ours && job.error ? " err" : ""), role: "status" }, ours ? jobText("site", job) : "");
-  box.replaceChildren(head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph, jobLine, ...[workersBlock(s)].filter(Boolean));
+  const parts = [head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph, jobLine, ...[workersBlock(s)].filter(Boolean)];
+  // The Environment section is moved, never rebuilt: it holds typing and
+  // pending edits, and taking it out of the page would drop its focus.
+  const env = envFor(s);
+  for (const c of [...box.children]) if (c !== env?.node) c.remove();
+  if (env) {
+    if (env.node.parentNode !== box) box.append(env.node);
+    env.node.before(...parts);
+  } else box.append(...parts);
   wireObs.disconnect();
   wireObs.observe(graph);
   drawWires();
@@ -937,6 +950,699 @@ function workersBlock(s) {
       el("span", { class: "hint" }, "Background processes laman runs for this site while it runs")),
     el("div", { class: "panel" }, workerRow(s, "queue", w.queue), workerRow(s, "reverb", w.reverb)));
 }
+
+// ---- Site detail: Environment (.env) ----
+// The project's .env as a table of keys. The section keeps its own state
+// per site (pending edits, revealed values, open inputs, the tab) and its
+// own node: renderSiteDetail rebuilds the rest of the page around that node
+// without touching it, so a poll's redraw never takes focus, typing or a
+// click from it. Only keys the user changed are sent. Secret values come
+// one at a time on a reveal click, or all at once behind "Show raw file".
+const envState = {}; // host -> the section's state (envNew)
+const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_MASK = "••••••••";
+const ENV_FILTER_AT = 20; // more rows than this get a filter box
+const envQ = (host) => `site=${encodeURIComponent(host)}`;
+
+function envNew(host) {
+  return {
+    host, data: null, err: "", gone: false, busy: "", tab: "table",
+    edits: new Map(),   // key -> value typed, for keys in the file and new ones
+    added: [],          // new keys, in the order they were added
+    deletes: new Set(), // keys to remove
+    open: new Set(),    // keys whose value input is open
+    values: new Map(),  // key -> secret value fetched by a reveal
+    shown: new Set(),   // revealed keys (Hide re-masks, keeping the value)
+    adding: null,       // "+ Add a key" form: {key, value, err}
+    filter: "",
+    raw: null,          // Raw tab, once shown: {orig, norm, text, fingerprint}
+    rawSeen: false,     // the user asked for the raw file on this visit
+    ask: null,          // inline question in the bar: {kind: "tab"|"leave", to}
+    notes: null,        // after a save: {configCached, workers, devRunning}
+    backupsOpen: false, backups: null, backupsErr: "",
+    restoreAsk: null,   // backup id waiting for its second click: {id, until}
+    needsKey: false,    // created from .env.example with an empty APP_KEY
+    focus: "",          // data-f of the element to focus after the next draw
+    node: el("section", { class: "env", "aria-labelledby": "env-title" }),
+    bar: null, barKey: "",
+  };
+}
+
+// The live row of a key: the last assignment (phpdotenv's last one wins).
+function envLive(st, key) {
+  const rows = st.data?.rows || [];
+  for (let i = rows.length - 1; i >= 0; i--) if (rows[i].key === key) return rows[i];
+  return null;
+}
+// What the file holds for a row; undefined for a secret nobody revealed.
+const envOrig = (st, r) => r.masked ? st.values.get(r.key) : r.value;
+// An edit that ends equal to the file is no change. A masked value nobody
+// revealed is unknown: an empty input there means "leave it".
+function envChanged(st, key) {
+  const r = envLive(st, key);
+  if (!r) return st.added.includes(key);
+  if (st.deletes.has(key)) return true;
+  if (!st.edits.has(key)) return false;
+  const v = st.edits.get(key), o = envOrig(st, r);
+  return o === undefined ? v !== "" : v !== o;
+}
+function envChanges(st) {
+  const out = [];
+  for (const r of st.data?.rows || []) {
+    if (r.ignored || r.multiline) continue;
+    if (st.deletes.has(r.key)) out.push({ op: "delete", key: r.key });
+    else if (envChanged(st, r.key)) out.push({ op: "set", key: r.key, value: st.edits.get(r.key) });
+  }
+  for (const k of st.added) out.push({ op: "set", key: k, value: st.edits.get(k) ?? "" });
+  return out;
+}
+const envRawDirty = (st) => !!st.raw && st.raw.text !== st.raw.norm;
+const envDirty = (st) => !!st && (envChanges(st).length > 0 || envRawDirty(st));
+
+// A textarea hands back \n line ends. Lines the user didn't touch at the
+// start and end keep the file's own ends; the edited middle gets the
+// file's usual one, so a CRLF file stays CRLF.
+function envRawOut(raw) {
+  const orig = raw.orig.split(/(?<=\n)/), next = raw.text.split(/(?<=\n)/);
+  const bare = (l) => l.replace(/\r?\n$/, "");
+  const same = (a, b) => bare(a) === bare(b) && a.endsWith("\n") === b.endsWith("\n");
+  let head = 0;
+  while (head < orig.length && head < next.length && same(orig[head], next[head])) head++;
+  let tail = 0;
+  while (tail < orig.length - head && tail < next.length - head && same(orig[orig.length - 1 - tail], next[next.length - 1 - tail])) tail++;
+  const crlf = (raw.orig.match(/\r\n/g) || []).length, lf = (raw.orig.match(/\n/g) || []).length - crlf;
+  const eol = crlf > lf ? "\r\n" : "\n";
+  const mid = next.slice(head, next.length - tail).map((l) => l.endsWith("\n") ? bare(l) + eol : l);
+  return [...orig.slice(0, head), ...mid, ...orig.slice(orig.length - tail)].join("");
+}
+
+// The section on the detail page: created once per visit, then moved, not rebuilt.
+function envFor(s) {
+  if (s.app) return null; // laman manages its apps' .env
+  let st = envState[s.host];
+  if (!st) {
+    st = envState[s.host] = envNew(s.host);
+    envDraw(s.host);
+    envLoad(s.host);
+  }
+  return st;
+}
+
+async function envLoad(host, keep) {
+  const st = envState[host];
+  if (!st) return;
+  try {
+    const d = await api("GET", `/api/env?${envQ(host)}`);
+    if (envState[host] !== st) return;
+    st.data = d;
+    st.err = "";
+    st.values.clear(); // revealed values may be old now
+    st.shown.clear();
+    if (keep) envRebase(st); else envClear(st);
+  } catch (e) {
+    if (envState[host] !== st) return;
+    if (/^no site/.test(e.message)) st.gone = true; else st.err = e.message;
+  }
+  envDraw(host);
+}
+
+function envClear(st) {
+  st.edits.clear();
+  st.added = [];
+  st.deletes.clear();
+  st.open.clear();
+  st.adding = null;
+  st.ask = null;
+  if (st.raw) st.raw.text = st.raw.norm;
+}
+
+// After a reload, keep what the user typed, against the file as it is now.
+function envRebase(st) {
+  for (const k of st.added.filter((k) => envLive(st, k))) st.added.splice(st.added.indexOf(k), 1); // now in the file: an edit of its row
+  for (const k of [...st.deletes]) if (!envLive(st, k)) st.deletes.delete(k);
+  for (const k of [...st.edits.keys()]) {
+    const r = envLive(st, k);
+    if (r ? r.multiline : !st.added.includes(k)) { st.edits.delete(k); st.open.delete(k); }
+    else if (r && !st.open.has(k) && !envChanged(st, k)) st.edits.delete(k);
+  }
+  for (const k of [...st.open]) if (!envLive(st, k) && !st.added.includes(k)) st.open.delete(k);
+}
+
+// Redraws the section from its state, keeping focus and the caret on the
+// element with the same data-f (or moving it to st.focus).
+function envDraw(host) {
+  const st = envState[host];
+  if (!st) return;
+  const node = st.node, had = document.activeElement;
+  const f = had && node.contains(had) ? had.dataset.f || "" : "";
+  let sel = null;
+  try { if (f && typeof had.selectionStart === "number") sel = [had.selectionStart, had.selectionEnd]; } catch { /* not a text field */ }
+  const rawScroll = node.querySelector(".env-raw");
+  const scroll = rawScroll ? [rawScroll.scrollTop, rawScroll.scrollLeft] : null;
+  node.replaceChildren(...envBody(st));
+  node.hidden = !node.firstChild;
+  envBarDraw(st, true);
+  envFilter(st);
+  const ta = node.querySelector(".env-raw");
+  if (ta && scroll) [ta.scrollTop, ta.scrollLeft] = scroll;
+  const want = st.focus || f;
+  const moved = !!st.focus;
+  st.focus = "";
+  if (!want) return;
+  const n = node.querySelector(`[data-f="${CSS.escape(want)}"]`);
+  if (!n) return;
+  n.focus({ preventScroll: !moved });
+  try {
+    if (!moved && sel) n.setSelectionRange(sel[0], sel[1]);
+    else if (moved && n.tagName === "INPUT") n.setSelectionRange(n.value.length, n.value.length);
+  } catch { /* not a text field */ }
+}
+
+function envBody(st) {
+  const d = st.data;
+  if (st.gone || (d && !d.exists && !d.exampleExists)) return [];
+  const title = el("h2", { id: "env-title" }, "Environment");
+  if (!d) return [el("div", { class: "sect-head env-head" }, title),
+    el("div", { class: "panel env-msg" }, st.err ? el("span", { class: "err" }, `Couldn't read .env: ${st.err}`) : el("span", { class: "muted" }, "Loading…"))];
+  if (d.tooBig) return [el("div", { class: "sect-head env-head" }, title),
+    el("div", { class: "panel env-msg" }, "This .env is over 256 KB — edit it in your editor.")];
+  if (!d.exists) return [el("div", { class: "sect-head env-head" }, title, el("span", { class: "hint" }, "This project has a .env.example but no .env yet")),
+    el("div", { class: "panel env-msg" },
+      el("span", {}, "Copy the example to start the project's settings."),
+      el("button", { class: "primary", "data-f": "create", disabled: !!st.busy, onclick: () => envCreate(st) }, st.busy === "create" ? "Creating…" : "Create .env from .env.example"))];
+
+  const busy = !!st.busy;
+  const tabs = el("div", { class: "env-tabs", role: "group", "aria-label": "Show .env as" },
+    ["table", "raw"].map((t) => el("button", { "aria-pressed": String(st.tab === t), "data-f": `tab:${t}`, onclick: () => envTab(st, t) }, t === "table" ? "Table" : "Raw")));
+  const find = st.tab === "table" && d.rows.length > ENV_FILTER_AT
+    ? el("input", { type: "search", class: "env-find", placeholder: "Filter keys", "aria-label": "Filter .env keys", value: st.filter, "data-f": "filter",
+      oninput: (e) => { st.filter = e.target.value; envFilter(st); },
+      onkeydown: (e) => { if (e.key === "Escape" && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = st.filter = ""; envFilter(st); } } })
+    : null;
+  const bk = el("button", { class: "linkish env-bkbtn", "aria-expanded": String(st.backupsOpen), "data-f": "backups", onclick: () => envBackupsToggle(st) },
+    "Backups", el("span", { class: "chev", "aria-hidden": "true" }, icon("chevron")));
+  const head = el("div", { class: "sect-head env-head" }, title,
+    el("span", { class: "hint" }, "The project's .env file"),
+    el("div", { class: "env-tools" }, find, tabs, bk));
+  const out = [head];
+  if (st.backupsOpen) out.push(envBackupsPane(st));
+  out.push(st.tab === "raw" ? envRawPane(st) : envTable(st, busy));
+  st.bar = el("div", { class: "env-bar", role: "region", "aria-label": "Unsaved .env changes", hidden: true });
+  out.push(st.bar);
+  const notes = envNotes(st);
+  if (notes) out.push(notes);
+  return out;
+}
+
+const envEmpty = (v) => v === "" ? el("span", { class: "env-none" }, "(empty)") : v;
+
+function envTable(st, busy) {
+  const d = st.data, rows = [];
+  const ak = envLive(st, "APP_KEY");
+  const keyNote = ak && !ak.masked && !ak.multiline && ak.value === "" && !st.edits.has("APP_KEY") && !st.deletes.has("APP_KEY") && (st.needsKey || detail?.workers?.laravel)
+    ? el("div", { class: "note env-keynote" }, el("span", {}, "APP_KEY is empty: Laravel can't encrypt sessions and cookies without it. ",
+      el("button", { class: "inline", "data-f": "appkey", disabled: busy, onclick: () => envAppKey(st) }, st.busy === "key" ? "Generating…" : "Generate APP_KEY")))
+    : null;
+  for (const r of d.rows) rows.push(envRowEl(st, r, busy));
+  for (const k of st.added) rows.push(envRowEl(st, null, busy, k));
+  const missing = d.missing.filter((m) => !st.added.includes(m.key));
+  return el("div", { class: "env-tablebox" },
+    keyNote,
+    el("div", { class: "panel env-table" },
+      rows.length ? rows : el("p", { class: "env-msg muted" }, "This .env has no keys yet."),
+      envAddForm(st, busy)),
+    missing.length ? el("div", { class: "env-missing" },
+      el("h3", {}, `Missing from .env.example (${missing.length})`),
+      el("div", { class: "panel env-table" }, missing.map((m) => el("div", { class: "env-row miss", "data-key": m.key },
+        el("span", { class: "env-k mono" }, el("span", { class: "env-name" }, m.key)),
+        el("span", { class: "env-v" }, el("span", { class: "env-val mono plain", title: m.masked ? "" : m.value }, m.masked ? el("span", { class: "env-none" }, "(secret — not shown)") : envEmpty(m.value))),
+        el("span", { class: "env-acts" }, el("button", { class: "env-addbtn", "data-f": `miss:${m.key}`, disabled: busy, title: `Add ${m.key} to .env${m.masked ? "" : " with the example's value"}`,
+          onclick: () => {
+            st.added.push(m.key);
+            st.edits.set(m.key, m.value);
+            st.open.add(m.key);
+            st.focus = `in:${m.key}`;
+            envDraw(st.host);
+          } }, "Add")))))) : null);
+}
+
+// One row: a key of the file (r), or a key being added (r null, key).
+function envRowEl(st, r, busy, key = r.key) {
+  if (r && r.ignored) {
+    return el("div", { class: "env-row ign" + (st.deletes.has(key) ? " del" : ""), "data-key": key },
+      el("span", { class: "env-k mono" }, el("span", { class: "env-name" }, key)),
+      el("span", { class: "env-v" },
+        el("span", { class: "env-val mono plain" }, r.masked ? ENV_MASK : envEmpty(r.value)),
+        el("span", { class: "env-why" }, `ignored — set again on line ${r.ignored}`)),
+      el("span", { class: "env-acts" }));
+  }
+  if (r && r.multiline) {
+    return el("div", { class: "env-row" + (st.deletes.has(key) ? " del" : ""), "data-key": key },
+      el("span", { class: "env-k mono" }, el("span", { class: "env-name" }, key)),
+      el("span", { class: "env-v" },
+        el("span", { class: "env-val mono plain" }, r.masked ? ENV_MASK : `${r.value.split("\n")[0]} …`),
+        el("button", { class: "linkish", "data-f": `rawlink:${key}`, onclick: () => envTab(st, "raw") }, "edit in Raw")),
+      el("span", { class: "env-acts" }));
+  }
+  const isNew = !r, del = !isNew && st.deletes.has(key), open = st.open.has(key) && !del;
+  const masked = !!r?.masked, shown = st.shown.has(key), hidden = masked && !shown;
+  const chg = isNew || (!del && envChanged(st, key));
+  let val;
+  if (open) {
+    const start = st.edits.has(key) ? st.edits.get(key) : hidden ? "" : envOrig(st, r) ?? "";
+    val = el("input", { type: "text", class: "env-in mono", value: start, placeholder: hidden ? "new value" : isNew ? "value" : "", "aria-label": `Value of ${key}`,
+      spellcheck: "false", autocomplete: "off", "data-f": `in:${key}`,
+      oninput: (e) => { st.edits.set(key, e.target.value); envMarks(st); },
+      onkeydown: (e) => {
+        if (e.key === "Enter") { e.preventDefault(); envDone(st, key); }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); envCancel(st, key); }
+      } });
+  } else {
+    const cur = st.edits.has(key) ? st.edits.get(key) : isNew ? "" : envOrig(st, r);
+    val = el("button", { class: "env-val mono", disabled: del || busy, "data-f": `val:${key}`, title: hidden || del ? "" : `${cur}`,
+      "aria-label": hidden ? `${key}: hidden value, edit` : undefined, onclick: () => envEdit(st, key) }, hidden ? ENV_MASK : envEmpty(cur ?? ""));
+  }
+  const acts = del
+    ? [el("button", { class: "linkish", "data-f": `undo:${key}`, onclick: () => { st.deletes.delete(key); st.focus = `del:${key}`; envDraw(st.host); } }, "Undo")]
+    : [masked ? el("button", { class: "icon", "data-f": `eye:${key}`, title: shown ? "Hide" : "Show value", "aria-label": `${shown ? "Hide" : "Show"} ${key}`,
+        "aria-pressed": String(shown), onclick: () => envReveal(st, key) }, icon(shown ? "eyeOff" : "eye")) : null,
+      open
+        ? el("button", { class: "icon", "data-f": `edit:${key}`, title: "Done", "aria-label": `Done editing ${key}`, onclick: () => envDone(st, key) }, icon("check"))
+        : el("button", { class: "icon", "data-f": `edit:${key}`, title: "Edit", "aria-label": `Edit ${key}`, disabled: busy, onclick: () => envEdit(st, key) }, icon("pencil")),
+      el("button", { class: "icon", "data-f": `del:${key}`, title: isNew ? "Don't add" : "Delete", "aria-label": `${isNew ? "Don't add" : "Delete"} ${key}`, disabled: busy,
+        onclick: () => envDelete(st, key) }, icon("trash"))];
+  return el("div", { class: "env-row" + (isNew ? " new" : del ? " del" : chg ? " chg" : ""), "data-key": key },
+    el("span", { class: "env-k mono" }, el("span", { class: "env-name" }, key),
+      el("span", { class: "env-tag", hidden: !chg && !del }, isNew ? "new" : del ? "to delete" : "changed")),
+    el("span", { class: "env-v" }, val),
+    el("span", { class: "env-acts" }, acts));
+}
+
+// Typing changes no markup but the row's mark and the bar.
+function envMarks(st) {
+  for (const n of st.node.querySelectorAll(".env-row[data-key]")) {
+    if (/\b(ign|new|del|miss)\b/.test(n.className)) continue;
+    const on = envChanged(st, n.dataset.key);
+    n.classList.toggle("chg", on);
+    const tag = n.querySelector(".env-tag");
+    if (tag) tag.hidden = !on;
+  }
+  envBarDraw(st);
+}
+
+function envFilter(st) {
+  const q = st.tab === "table" && st.data?.rows.length > ENV_FILTER_AT ? st.filter.trim().toLowerCase() : "";
+  for (const n of st.node.querySelectorAll(".env-row[data-key]")) n.hidden = !!q && !n.dataset.key.toLowerCase().includes(q);
+}
+
+function envEdit(st, key) {
+  st.open.add(key);
+  st.focus = `in:${key}`;
+  envDraw(st.host);
+}
+function envDone(st, key) {
+  st.open.delete(key);
+  if (envLive(st, key) && !envChanged(st, key)) st.edits.delete(key);
+  st.focus = `edit:${key}`;
+  envDraw(st.host);
+}
+function envCancel(st, key) {
+  st.open.delete(key);
+  if (envLive(st, key)) st.edits.delete(key);
+  st.focus = `edit:${key}`;
+  envDraw(st.host);
+}
+function envDelete(st, key) {
+  st.open.delete(key);
+  if (!envLive(st, key)) {
+    st.added = st.added.filter((k) => k !== key);
+    st.edits.delete(key);
+    st.focus = "add";
+  } else {
+    st.deletes.add(key);
+    st.focus = `undo:${key}`;
+  }
+  envDraw(st.host);
+}
+
+async function envReveal(st, key) {
+  if (st.shown.has(key)) {
+    st.shown.delete(key);
+    return envDraw(st.host);
+  }
+  if (!st.values.has(key)) {
+    try {
+      const r = await api("GET", `/api/env/value?${envQ(st.host)}&key=${encodeURIComponent(key)}`);
+      if (envState[st.host] !== st) return;
+      st.values.set(key, r.value);
+      // An empty input typed blind meant "leave it": show the real value instead.
+      if (st.edits.get(key) === "") st.edits.delete(key);
+    } catch (e) { return alertNote(e.message); }
+  }
+  st.shown.add(key);
+  envDraw(st.host);
+}
+
+function envAddForm(st, busy) {
+  const a = st.adding;
+  if (!a) return el("div", { class: "env-addrow" }, el("button", { class: "linkish", "data-f": "add", disabled: busy,
+    onclick: () => { st.adding = { key: "", value: "", err: "" }; st.focus = "add-key"; envDraw(st.host); } }, "+ Add a key"));
+  const cancel = () => { st.adding = null; st.focus = "add"; envDraw(st.host); };
+  const esc = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); } };
+  return el("form", { class: "env-row env-adding", novalidate: true, onsubmit: (e) => { e.preventDefault(); envAddKey(st); } },
+    el("span", { class: "env-k" }, el("input", { type: "text", class: "env-in mono", placeholder: "KEY_NAME", value: a.key, "aria-label": "New key name",
+      spellcheck: "false", autocomplete: "off", "data-f": "add-key", oninput: (e) => { a.key = e.target.value; }, onkeydown: esc })),
+    el("span", { class: "env-v" }, el("input", { type: "text", class: "env-in mono", placeholder: "value", value: a.value, "aria-label": "New key's value",
+      spellcheck: "false", autocomplete: "off", "data-f": "add-val", oninput: (e) => { a.value = e.target.value; }, onkeydown: esc })),
+    el("span", { class: "env-acts" }, el("button", { type: "submit", "data-f": "add-ok" }, "Add"),
+      el("button", { type: "button", class: "linkish", onclick: cancel }, "Cancel")),
+    a.err ? el("span", { class: "env-why err env-err", role: "alert" }, a.err) : null);
+}
+
+function envAddKey(st) {
+  const a = st.adding, k = a.key.trim();
+  if (!ENV_KEY.test(k)) {
+    a.err = k ? `${k} isn't a valid key: use letters, digits and _, not starting with a digit.` : "Type a key name.";
+    st.focus = "add-key";
+    return envDraw(st.host);
+  }
+  const r = envLive(st, k);
+  if (r?.multiline) {
+    a.err = `${k} spans several lines: edit it in Raw.`;
+    st.focus = "add-key";
+    return envDraw(st.host);
+  }
+  st.deletes.delete(k);
+  st.edits.set(k, a.value);
+  if (!r && !st.added.includes(k)) st.added.push(k);
+  st.adding = null;
+  st.focus = r ? `val:${k}` : "add";
+  envDraw(st.host);
+}
+
+// The bar under the table: the count with Discard and Save, or a question.
+// Redrawn only when what it shows changes, so typing doesn't replace it.
+function envBarDraw(st, force) {
+  const bar = st.bar;
+  if (!bar) return;
+  const n = st.tab === "table" ? envChanges(st).length : 0, raw = envRawDirty(st);
+  const key = JSON.stringify([n, raw, st.ask, st.busy]);
+  if (!force && key === st.barKey) return;
+  st.barKey = key;
+  const had = document.activeElement, f = had && bar.contains(had) ? had.dataset.f : "";
+  const busy = !!st.busy;
+  if (st.ask) {
+    const what = raw ? "your edits to the raw file" : `${plural(n, "unsaved change")} to .env`;
+    bar.className = "env-bar ask";
+    bar.replaceChildren(
+      el("span", { class: "env-count" }, st.ask.kind === "leave"
+        ? `Leave this page? ${what[0].toUpperCase()}${what.slice(1)} will be lost.`
+        : `Switch to ${st.ask.to === "raw" ? "Raw" : "Table"}? First discard ${what}.`),
+      el("button", { "data-f": "ask-no", onclick: () => { st.ask = null; st.focus = "save"; envDraw(st.host); } }, st.ask.kind === "leave" ? "Stay" : "Keep editing"),
+      el("button", { class: "confirm", "data-f": "ask-yes", onclick: () => envAskYes(st) }, st.ask.kind === "leave" ? "Leave without saving" : "Discard and switch"));
+  } else if (n || raw) {
+    bar.className = "env-bar";
+    bar.replaceChildren(
+      el("span", { class: "env-count" }, raw ? "Unsaved edits to the raw file" : plural(n, "unsaved change")),
+      el("button", { "data-f": "discard", disabled: busy, onclick: () => { envClear(st); st.focus = st.tab === "raw" ? "raw" : "add"; envDraw(st.host); } }, "Discard"),
+      el("button", { class: "primary", "data-f": "save", disabled: busy, onclick: () => envSave(st) }, st.busy === "save" ? "Saving…" : "Save .env"));
+  } else {
+    bar.replaceChildren();
+  }
+  bar.hidden = !bar.firstChild;
+  if (f) bar.querySelector(`[data-f="${f}"]`)?.focus({ preventScroll: true });
+}
+
+function envAsk(st, ask) {
+  st.ask = ask;
+  st.focus = "ask-no";
+  envDraw(st.host);
+  st.bar?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function envAskYes(st) {
+  const ask = st.ask;
+  st.ask = null;
+  if (ask.kind === "leave") {
+    delete envState[st.host];
+    location.hash = ask.to;
+    return;
+  }
+  envClear(st);
+  envSwitch(st, ask.to);
+}
+
+function envTab(st, t) {
+  if (st.tab === t) return;
+  const dirty = t === "raw" ? envChanges(st).length > 0 : envRawDirty(st);
+  if (dirty) return envAsk(st, { kind: "tab", to: t });
+  envSwitch(st, t);
+}
+function envSwitch(st, t) {
+  st.tab = t;
+  st.ask = null;
+  st.focus = `tab:${t}`;
+  envDraw(st.host);
+  if (t === "raw" && !st.raw && st.rawSeen) envRawLoad(st);
+}
+
+function envRawPane(st) {
+  if (!st.raw) {
+    return el("div", { class: "panel env-msg env-rawask" },
+      el("span", { class: "muted" }, "The whole file as text, for pasting or bulk edits. It shows every value, secrets included."),
+      el("button", { "data-f": "showraw", disabled: !!st.busy, onclick: () => envRawLoad(st) }, st.busy === "raw" ? "Loading…" : "Show raw file (shows secrets)"));
+  }
+  const lines = st.raw.text.split("\n").length;
+  const ta = el("textarea", { class: "env-raw mono", spellcheck: "false", autocomplete: "off", wrap: "off", "aria-label": ".env file", "data-f": "raw",
+    rows: String(Math.min(30, Math.max(8, lines + 1))), disabled: st.busy === "save",
+    oninput: (e) => { st.raw.text = e.target.value; envBarDraw(st); } });
+  ta.value = st.raw.text;
+  return el("div", { class: "env-rawbox" }, ta,
+    el("p", { class: "env-fine" }, "Save writes this text as the whole file; the current one goes to Backups first."));
+}
+
+async function envRawLoad(st) {
+  st.busy = "raw";
+  envDraw(st.host);
+  try {
+    const r = await api("GET", `/api/env/raw?${envQ(st.host)}`);
+    if (envState[st.host] !== st) return;
+    st.raw = { orig: r.text, norm: r.text.replace(/\r\n?/g, "\n"), text: r.text.replace(/\r\n?/g, "\n"), fingerprint: r.fingerprint };
+    st.rawSeen = true;
+    if (st.tab === "raw") st.focus = "raw";
+    // The file changed since the table was read: read that again too.
+    if (st.data && r.fingerprint !== st.data.fingerprint) envLoad(st.host, true);
+  } catch (e) { alertNote(e.message); }
+  st.busy = "";
+  envDraw(st.host);
+}
+
+async function envSave(st) {
+  if (st.busy) return;
+  const raw = st.tab === "raw" && envRawDirty(st) ? envRawOut(st.raw) : null;
+  const changes = raw === null ? envChanges(st) : null;
+  if (raw === null && !changes.length) return;
+  const body = raw !== null ? { site: st.host, fingerprint: st.raw.fingerprint, raw } : { site: st.host, fingerprint: st.data.fingerprint, changes };
+  st.busy = "save";
+  envDraw(st.host);
+  let r;
+  try { r = await api("POST", "/api/env/save", body); } catch (e) {
+    st.busy = "";
+    envDraw(st.host);
+    return envFail(st, e);
+  }
+  const what = raw !== null ? "the raw file" : plural(changes.length, "change");
+  envAfter(st, r, r.changed ? `Saved ${st.host}'s .env (${what}).` : `Nothing to save: ${st.host}'s .env already says that.`, false,
+    raw !== null ? { orig: raw, norm: raw.replace(/\r\n?/g, "\n"), text: raw.replace(/\r\n?/g, "\n"), fingerprint: r.fingerprint } : null);
+}
+
+// After any write: say so, note what still holds the old values, and read
+// the file (and the page's facts) again. keep: pending table edits stay.
+async function envAfter(st, r, msg, keep, raw) {
+  st.busy = "";
+  if (r.changed) st.notes = { configCached: !!r.configCached, workers: r.workers || [], devRunning: !!r.devRunning };
+  alertNote(msg, "note info");
+  if (!keep) envClear(st);
+  st.raw = raw || null; // the raw text is the file's again, or read anew when Raw opens
+  if (!st.raw && st.tab === "raw") envRawLoad(st);
+  if (st.backupsOpen) envBackupsLoad(st);
+  await envLoad(st.host, keep);
+  loadDetail(); // DB, Redis, mail and queue may point elsewhere now
+}
+
+// 409: the file changed on disk after the page read it. Reload keeps
+// table edits (they are per key) but the raw text is read again.
+function envFail(st, e) {
+  if (!/changed on disk/.test(e.message)) return alertNote(e.message);
+  const msg = ".env changed on disk since you opened it — reload";
+  alertNote(msg, "note warn", [el("code", {}, ".env"), " changed on disk since you opened it — ",
+    el("button", { class: "inline", onclick: () => { dropToast(msg); envReload(st); } }, "Reload")]);
+}
+function envReload(st) {
+  if (envState[st.host] !== st) return;
+  if (st.raw) { st.raw = null; if (st.tab === "raw") envRawLoad(st); }
+  envLoad(st.host, true);
+}
+
+async function envCreate(st) {
+  st.busy = "create";
+  envDraw(st.host);
+  try {
+    const r = await api("POST", "/api/env/create", { site: st.host });
+    st.needsKey = !!r.needsKey;
+    alertNote(`Created ${st.host}'s .env from .env.example.`, "note info");
+  } catch (e) { alertNote(e.message); }
+  st.busy = "";
+  await envLoad(st.host);
+  loadDetail();
+}
+
+async function envAppKey(st) {
+  st.busy = "key";
+  envDraw(st.host);
+  try {
+    const r = await api("POST", "/api/env/appkey", { site: st.host, fingerprint: st.data.fingerprint });
+    st.needsKey = false;
+    envAfter(st, r, `Generated an APP_KEY for ${st.host}.`, true);
+  } catch (e) {
+    st.busy = "";
+    envDraw(st.host);
+    envFail(st, e);
+  }
+}
+
+// After a save: what still runs with the old values, and the fix.
+function envNotes(st) {
+  const n = st.notes;
+  if (!n) return null;
+  const busy = !!st.busy, items = [];
+  if (n.configCached) items.push(["Laravel is using cached config; changes apply after clearing it. ",
+    el("button", { class: "inline", "data-f": "cfgclear", disabled: busy, onclick: () => envNoteAction(st, "cfg") }, st.busy === "cfg" ? "Clearing…" : "Clear config cache")]);
+  if (n.workers.length) items.push(["Workers still have the old values. ",
+    el("button", { class: "inline", "data-f": "wkrestart", disabled: busy, onclick: () => envNoteAction(st, "wk") }, st.busy === "wk" ? "Restarting…" : "Restart workers")]);
+  if (n.devRunning) items.push(["Restart the dev server to pick this up. ",
+    el("button", { class: "inline", "data-f": "devrestart", disabled: busy, onclick: () => envNoteAction(st, "dev") }, st.busy === "dev" ? "Restarting…" : "Restart dev server")]);
+  if (!items.length) return null;
+  return el("div", { class: "env-notes", role: "status" }, items.map((parts) => el("div", { class: "note" }, el("span", {}, parts))));
+}
+
+async function envNoteAction(st, what) {
+  const host = st.host;
+  st.busy = what;
+  envDraw(host);
+  try {
+    if (what === "cfg") {
+      await api("POST", "/api/env/config-clear", { site: host });
+      st.notes.configCached = false;
+      alertNote(`Cleared ${host}'s config cache: Laravel reads .env again.`, "note info");
+    } else if (what === "wk") {
+      await api("POST", "/api/env/restart-workers", { site: host });
+      st.notes.workers = [];
+      alertNote(`Restarted ${host}'s workers.`, "note info");
+    } else {
+      await api("POST", "/api/dev/stop", { site: host });
+      await api("POST", "/api/dev/start", { site: host });
+      st.notes.devRunning = false;
+      alertNote(`Restarting ${host}'s dev server.`, "note info");
+    }
+  } catch (e) { alertNote(e.message); }
+  st.busy = "";
+  envDraw(host);
+  if (what === "wk") loadDetail();
+  if (what === "dev") refresh();
+}
+
+function envBackupsToggle(st) {
+  st.backupsOpen = !st.backupsOpen;
+  st.restoreAsk = null;
+  st.focus = "backups";
+  envDraw(st.host);
+  if (st.backupsOpen) envBackupsLoad(st);
+}
+async function envBackupsLoad(st) {
+  try {
+    const list = await api("GET", `/api/env/backups?${envQ(st.host)}`);
+    if (envState[st.host] !== st) return;
+    st.backups = list || [];
+    st.backupsErr = "";
+  } catch (e) { st.backupsErr = e.message; }
+  envDraw(st.host);
+}
+const envWhen = (t) => new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+
+function envBackupsPane(st) {
+  const list = st.backups, dirty = envDirty(st), busy = !!st.busy;
+  const asking = st.restoreAsk && Date.now() < st.restoreAsk.until ? st.restoreAsk.id : "";
+  return el("div", { class: "panel env-backups" },
+    el("p", { class: "env-fine" }, "Copies of .env from before each change, newest first (laman keeps 10). Restoring backs up the current file first."),
+    list === null ? el("p", { class: st.backupsErr ? "err" : "muted" }, st.backupsErr || "Loading…")
+      : !list.length ? el("p", { class: "muted" }, "No backups yet: laman makes one before the first change.")
+      : list.map((b) => el("div", { class: "env-bk" },
+        el("span", { class: "env-bk-when" }, envWhen(b.time)),
+        el("span", { class: "env-bk-size mono" }, fmtBytes(b.size)),
+        el("button", { class: asking === b.id ? "confirm" : "", "data-f": `restore:${b.id}`, disabled: busy,
+          title: asking === b.id ? "Click again to restore" : `Put this copy back as ${st.host}'s .env`,
+          onclick: () => envRestoreClick(st, b) },
+        st.busy === "restore" && asking === b.id ? "Restoring…" : asking === b.id ? (dirty ? "Restore and discard edits?" : "Restore?") : "Restore"))));
+}
+
+function envRestoreClick(st, b) {
+  if (!(st.restoreAsk?.id === b.id && Date.now() < st.restoreAsk.until)) {
+    st.restoreAsk = { id: b.id, until: Date.now() + 6000 };
+    st.focus = `restore:${b.id}`;
+    envDraw(st.host);
+    setTimeout(() => { if (st.restoreAsk?.id === b.id && Date.now() >= st.restoreAsk.until) { st.restoreAsk = null; envDraw(st.host); } }, 6050);
+    return;
+  }
+  envRestore(st, b);
+}
+async function envRestore(st, b) {
+  st.busy = "restore";
+  envDraw(st.host);
+  try {
+    const r = await api("POST", "/api/env/restore", { site: st.host, fingerprint: st.data.fingerprint, backup: b.id });
+    st.restoreAsk = null;
+    if (st.tab === "raw") st.raw = null;
+    envAfter(st, r, r.changed ? `Restored ${st.host}'s .env from ${envWhen(b.time)}. The file it replaced is in Backups.` : `${st.host}'s .env already matches that backup.`, false);
+  } catch (e) {
+    st.busy = "";
+    st.restoreAsk = null;
+    envDraw(st.host);
+    envFail(st, e);
+  }
+}
+
+// Leaving a site page with unsaved .env edits asks first, in the bar. Links
+// are stopped before they navigate; anything else (Back, a typed address)
+// is put back and asked about.
+let envHash = location.hash;
+const envHostOf = (hash) => {
+  if (!hash.startsWith("#site/")) return "";
+  try { return decodeURIComponent(hash.slice(6)); } catch { return ""; }
+};
+function envGuard() {
+  const prev = envHash, now = location.hash;
+  if (prev === now) return false;
+  const host = envHostOf(prev), st = host ? envState[host] : null;
+  if (st && envHostOf(now) !== host) {
+    if (envDirty(st)) {
+      history.replaceState(null, "", prev);
+      envAsk(st, { kind: "leave", to: now || "#home" });
+      return true;
+    }
+    delete envState[host]; // the next visit reads the file again; revealed values are forgotten
+  }
+  envHash = now;
+  return false;
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest?.('a[href^="#"]');
+  if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  const host = envHostOf(location.hash), st = host ? envState[host] : null, to = a.getAttribute("href");
+  if (!st || !envDirty(st) || envHostOf(to) === host) return;
+  e.preventDefault();
+  envAsk(st, { kind: "leave", to });
+}, true);
 
 
 // Home: the prompt line, the stack rack, and counts in the rail.
@@ -1985,6 +2691,7 @@ const currentView = () => {
   return h.startsWith("site/") ? "site" : VIEWS.includes(h) ? h : "home";
 };
 function showView() {
+  if (envGuard()) return; // unsaved .env edits: the page asks first
   const view = currentView();
   for (const sec of document.querySelectorAll(".view")) {
     const on = sec.dataset.view === view;
@@ -2315,7 +3022,8 @@ async function act(fn) {
 // counter on the toast that is already there instead of stacking a copy.
 // Errors stay longer; hovering a toast keeps it until the pointer leaves.
 const toasts = new Map(); // msg -> {node, count, timer}
-function alertNote(msg, cls = "note err") {
+// body, when given, is shown instead of msg (which still names the toast).
+function alertNote(msg, cls = "note err", body) {
   const kind = /\binfo\b/.test(cls) ? "info" : /\berr\b/.test(cls) ? "err" : "warn";
   const life = kind === "err" ? 12000 : 8000;
   let t = toasts.get(msg);
@@ -2324,7 +3032,7 @@ function alertNote(msg, cls = "note err") {
     t.node.querySelector(".times").textContent = `×${t.count}`;
   } else {
     const node = el("div", { class: `toast ${kind}` },
-      el("div", { class: "msg" }, msg, el("span", { class: "times" })),
+      el("div", { class: "msg" }, body || msg, el("span", { class: "times" })),
       el("button", { class: "x", "aria-label": "Dismiss", title: "Dismiss", onclick: () => dropToast(msg) }, "×"));
     t = { node, count: 1, timer: 0 };
     node.addEventListener("mouseenter", () => clearTimeout(t.timer));
