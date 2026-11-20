@@ -400,7 +400,7 @@ func (d *daemon) envRoutes(mux *http.ServeMux) {
 		out, err := cmd.CombinedOutput()
 		text := strings.TrimSpace(string(out))
 		if err != nil {
-			fail(w, http.StatusInternalServerError, "php artisan config:clear failed: %s", firstNonEmpty(text, err.Error()))
+			fail(w, http.StatusInternalServerError, "%s", configClearFailure(text, err))
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "output": text})
@@ -422,4 +422,22 @@ func (d *daemon) envRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]bool{"ok": true})
 	})
+}
+
+// configClearFailure is the error text for a failed config:clear. A phpdotenv
+// parse error can quote a line of .env (a secret), so only the first line of
+// output is kept, cut at " at [", and none at all when it mentions dotenv.
+func configClearFailure(out string, err error) string {
+	msg := "php artisan config:clear failed"
+	if strings.Contains(strings.ToLower(out), "dotenv") {
+		return msg + ": " + err.Error()
+	}
+	first, _, _ := strings.Cut(out, "\n")
+	if i := strings.Index(first, " at ["); i >= 0 {
+		first = first[:i]
+	}
+	if first = strings.TrimSpace(first); first != "" {
+		msg += ": " + first
+	}
+	return msg
 }

@@ -83,9 +83,10 @@ func encodeEnvValue(value string, prefer byte) string {
 // value that closes on a later line is one envLine with Multiline set.
 func parseEnv(text string) []envLine {
 	var out []envLine
+	text = strings.TrimPrefix(text, "\uFEFF")
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	for i := 0; i < len(lines); i++ {
-		m := envAssign.FindStringSubmatch(strings.TrimSpace(lines[i]))
+		m := envAssign.FindStringSubmatch(strings.Trim(lines[i], " \t"))
 		if m == nil {
 			continue
 		}
@@ -139,6 +140,8 @@ type envMissing struct {
 	Key    string `json:"key"`
 	Value  string `json:"value"`
 	Masked bool   `json:"masked"`
+	// Multiline: the example value holds a line break, so it can only be added in Raw.
+	Multiline bool `json:"multiline"`
 }
 
 // buildEnvView turns a .env and its .env.example into table rows and the
@@ -152,7 +155,7 @@ func buildEnvView(env, example string) (rows []envRow, missing []envMissing) {
 		have[l.Key] = true
 	}
 	for _, l := range lines {
-		r := envRow{Key: l.Key, Value: l.Value, Line: l.Line, Multiline: l.Multiline, Masked: isSecretEnv(l.Key, l.Value)}
+		r := envRow{Key: l.Key, Value: l.Value, Line: l.Line, Multiline: l.Multiline || strings.ContainsAny(l.Value, "\r\n"), Masked: isSecretEnv(l.Key, l.Value)}
 		if l.Quote != 0 {
 			r.Quoted = string(l.Quote)
 		}
@@ -169,7 +172,7 @@ func buildEnvView(env, example string) (rows []envRow, missing []envMissing) {
 			continue
 		}
 		have[l.Key] = true
-		m := envMissing{Key: l.Key, Value: l.Value, Masked: isSecretEnv(l.Key, l.Value)}
+		m := envMissing{Key: l.Key, Value: l.Value, Masked: isSecretEnv(l.Key, l.Value), Multiline: l.Multiline || strings.ContainsAny(l.Value, "\r\n")}
 		if m.Masked {
 			m.Value = ""
 		}

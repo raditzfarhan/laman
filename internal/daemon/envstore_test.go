@@ -244,3 +244,38 @@ func TestSaveConflictAfterReverb(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestWriteEnvFailureKeepsBackups(t *testing.T) {
+	d, s := envStoreFixture(t, "A=1\n")
+	for i := 0; i < envKeepBackups; i++ {
+		if _, err := saveEnvBackup("acme", []byte("old"), 0o644, time.Now().Add(time.Duration(i-20)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, _ := listEnvBackups("acme")
+	old := renameEnvFile
+	renameEnvFile = func(a, b string) error { return errors.New("locked") }
+	defer func() { renameEnvFile = old }()
+	if _, err := d.writeEnv(s, "", setA("2")); err == nil {
+		t.Fatal("no error")
+	}
+	after, _ := listEnvBackups("acme")
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("backups changed:\n%+v\n%+v", before, after)
+	}
+	if b, _ := os.ReadFile(filepath.Join(s.Path, ".env")); string(b) != "A=1\n" {
+		t.Fatalf(".env = %q", b)
+	}
+}
+
+func TestMigrateLegacyMissingIsFine(t *testing.T) {
+	old := renameEnvFile
+	renameEnvFile = func(a, b string) error { return os.ErrNotExist }
+	defer func() { renameEnvFile = old }()
+	t.Setenv("LAMAN_HOME", t.TempDir())
+	_ = os.MkdirAll(filepath.Join(config.DataDir(), "env-backups"), 0o755)
+	_ = os.WriteFile(filepath.Join(config.DataDir(), "env-backups", "acme.env"), []byte("x"), 0o644)
+	if err := migrateLegacyEnvBackup("acme"); err != nil {
+		t.Fatal(err)
+	}
+}

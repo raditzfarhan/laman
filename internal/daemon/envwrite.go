@@ -16,7 +16,7 @@ type envKV struct{ Key, Value string }
 // reverbEnv is what laman wants in a project's .env for Reverb behind its
 // proxy: the browser (VITE_*) uses the site's host/scheme/port, while PHP
 // (REVERB_*) talks straight to the Reverb process on loopback over plain http,
-// since PHP does not trust laman's local CA.
+// because that is simpler and faster than going through the proxy.
 func reverbEnv(host, scheme string, port, reverbPort int) []envKV {
 	p := strconv.Itoa(port)
 	rp := strconv.Itoa(reverbPort)
@@ -111,7 +111,11 @@ func applyEnvChanges(text string, changes []envChange) (string, error) {
 			lines = kept
 		case len(at) > 0:
 			i := at[len(at)-1]
-			lines[i] = rewriteEnvLine(lines[i], c.Value)
+			nl, err := rewriteEnvLine(lines[i], c.Value)
+			if err != nil {
+				return "", errors.New(c.Key + ": " + err.Error())
+			}
+			lines[i] = nl
 		default:
 			if n := len(lines); n > 0 && !strings.HasSuffix(lines[n-1], "\n") {
 				lines[n-1] += eol
@@ -127,10 +131,17 @@ var envLinePrefix = regexp.MustCompile(`^[ \t]*(?:export[ \t]+)?[A-Za-z_][A-Za-z
 
 // rewriteEnvLine replaces the value of one assignment line (with its EOL),
 // keeping everything around it.
-func rewriteEnvLine(line, value string) string {
+func rewriteEnvLine(line, value string) (string, error) {
+	bom := ""
+	if strings.HasPrefix(line, "\uFEFF") { // the BOM of the file's first line stays as is
+		bom, line = "\uFEFF", line[len("\uFEFF"):]
+	}
 	body := strings.TrimRight(line, "\r\n")
 	eol := line[len(body):]
 	prefix := envLinePrefix.FindString(body)
+	if prefix == "" {
+		return "", errors.New("cannot edit this line in place; use Raw")
+	}
 	rest := body[len(prefix):]
 	trimmed := strings.TrimRight(rest, " \t")
 	space := rest[len(trimmed):]
@@ -143,5 +154,5 @@ func rewriteEnvLine(line, value string) string {
 	if enc != "" && strings.HasPrefix(tail, "#") {
 		tail = " " + tail
 	}
-	return prefix + enc + tail + eol
+	return bom + prefix + enc + tail + eol, nil
 }

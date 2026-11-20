@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"laman/internal/fsx"
 )
 
 const (
@@ -70,7 +72,7 @@ func (ca *CA) AddToBundle(bundle string) (changed bool, err error) {
 		return false, err
 	}
 	os.Chmod(tmp.Name(), mode)
-	if err := os.Rename(tmp.Name(), bundle); err != nil {
+	if err := fsx.Rename(tmp.Name(), bundle); err != nil {
 		return false, err
 	}
 	return true, nil

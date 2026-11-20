@@ -112,3 +112,26 @@ func TestApplyRefuses(t *testing.T) {
 		}
 	}
 }
+
+func TestSetKeepsBOM(t *testing.T) {
+	got := applyOne(t, "\uFEFFAPP_NAME=x\n", envChange{"set", "APP_NAME", "y"})
+	if got != "\uFEFFAPP_NAME=y\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSetLeavesOddWhitespaceLines(t *testing.T) {
+	for _, pre := range []string{"\u00a0", "\v"} {
+		text := pre + "A=1\n"
+		got := applyOne(t, text, envChange{"set", "A", "9"})
+		if got != text+"A=9\n" {
+			t.Errorf("%q: got %q", pre, got)
+		}
+	}
+}
+
+func TestRewriteEnvLineRefusesNoPrefix(t *testing.T) {
+	if _, err := rewriteEnvLine("\u00a0A=1\n", "9"); err == nil {
+		t.Fatal("no error")
+	}
+}

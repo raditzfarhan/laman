@@ -137,6 +137,7 @@ type daemon struct {
 	workersReady bool
 	portWatch    map[string]*handle // add-on servers whose port is being watched for waiting workers; guarded by mu
 	quitOnce     sync.Once
+	bundleOnce   sync.Once // logs a missing PHP CA bundle once
 	updates      updater   // laman's own newer release, if any
 	sizes        sizeCache // project folder sizes for the site detail page
 	// laragonFound: a Laragon install is at laragon.DefaultRoot, checked at
@@ -667,10 +668,13 @@ func (d *daemon) issueCerts(in *caddyconf.Input, list []sites.Site) (tlsState, b
 	}
 	st := tlsState{enabled: true, trusted: ca.Trusted()}
 	// PHP's CA bundle gets laman's CA so curl/openssl accept .<tld> sites.
-	if ch, err := ca.AddToBundle(filepath.Join(config.EtcDir(), "cacert.pem")); err != nil {
+	bundle := filepath.Join(config.EtcDir(), "cacert.pem")
+	if ch, err := ca.AddToBundle(bundle); err != nil {
 		logf("PHP CA bundle: %v", err)
 	} else if ch {
 		logf("added laman's CA to PHP's CA bundle")
+	} else if !exists(bundle) {
+		d.bundleOnce.Do(func() { logf("PHP CA bundle %s not found; PHP will not trust laman's CA", bundle) })
 	}
 	dir := config.CertDir()
 	crt, key, changed, err := ca.Leaf(dir, "localhost", []net.IP{net.IPv4(127, 0, 0, 1).To4(), net.IPv6loopback})

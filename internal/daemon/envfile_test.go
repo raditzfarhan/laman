@@ -103,3 +103,36 @@ func TestDecodeEscapes(t *testing.T) {
 		}
 	}
 }
+
+func TestViewEscapedNewlineIsMultiline(t *testing.T) {
+	rows, _ := buildEnvView("A=\"x\ny\"\nB=\"p\"\n", "")
+	if !rows[0].Multiline || rows[1].Multiline {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestViewMissingWithLineBreak(t *testing.T) {
+	_, missing := buildEnvView("", "K=\"a\nb\"\nL=1\n")
+	if len(missing) != 2 || !missing[0].Multiline || missing[1].Multiline {
+		t.Fatalf("missing = %+v", missing)
+	}
+}
+
+func TestParseOnlyBlankPrefixCounts(t *testing.T) {
+	for _, pre := range []string{"\u00a0", "\v", "\f"} {
+		if got := parseEnv(pre + "A=1\n"); len(got) != 0 {
+			t.Errorf("%q: got %+v", pre, got)
+		}
+	}
+}
+
+func TestParseAndViewBOM(t *testing.T) {
+	got := parseEnv("\uFEFFAPP_NAME=x\n")
+	if len(got) != 1 || got[0].Key != "APP_NAME" {
+		t.Fatalf("got %+v", got)
+	}
+	rows, missing := buildEnvView("\uFEFFAPP_NAME=x\n", "APP_NAME=\n")
+	if len(rows) != 1 || len(missing) != 0 {
+		t.Fatalf("rows %+v missing %+v", rows, missing)
+	}
+}

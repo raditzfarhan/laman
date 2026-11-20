@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"laman/internal/config"
+	"laman/internal/fsx"
 	"laman/internal/sites"
 )
 
@@ -26,6 +27,9 @@ const (
 	envMaxSize     = 256 << 10
 	envKeepBackups = 10
 )
+
+// renameEnvFile is the rename that puts the new .env in place (a hook for tests).
+var renameEnvFile = fsx.Rename
 
 var errEnvChanged = errors.New(".env changed on disk since you opened it — reload")
 
@@ -96,14 +100,16 @@ func (d *daemon) writeEnv(s sites.Site, fingerprint string, edit func(orig strin
 		return envSaved{}, err
 	}
 	perm := fi.Mode().Perm()
-	id, err := saveEnvBackup(s.Name, orig, perm, time.Now())
+	id, err := writeEnvBackup(s.Name, orig, perm, time.Now())
 	if err != nil {
 		return envSaved{}, err
 	}
+	bpath := filepath.Join(envBackupDir(s.Name), id+".env")
 
 	// Next to .env so the rename is atomic; it becomes .env (or is removed).
 	tmp, err := os.CreateTemp(s.Path, ".env.laman-*")
 	if err != nil {
+		os.Remove(bpath)
 		return envSaved{}, err
 	}
 	name := tmp.Name()
@@ -113,16 +119,20 @@ func (d *daemon) writeEnv(s sites.Site, fingerprint string, edit func(orig strin
 	}
 	if werr != nil {
 		os.Remove(name)
+		os.Remove(bpath)
 		return envSaved{}, werr
 	}
 	if err := os.Chmod(name, perm); err != nil {
 		os.Remove(name)
+		os.Remove(bpath)
 		return envSaved{}, err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := renameEnvFile(name, path); err != nil {
 		os.Remove(name)
+		os.Remove(bpath)
 		return envSaved{}, err
 	}
+	pruneEnvBackups(s.Name)
 	return envSaved{Changed: true, Fingerprint: envFingerprint([]byte(out)), Backup: id}, nil
 }
 
@@ -153,12 +163,25 @@ func migrateLegacyEnvBackup(name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.Rename(legacy, filepath.Join(dir, newEnvBackupID(dir, fi.ModTime())+".env"))
+	err = renameEnvFile(legacy, filepath.Join(dir, newEnvBackupID(dir, fi.ModTime())+".env"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // already moved by someone else
+	}
+	return err
 }
 
 // saveEnvBackup stores orig as the newest backup and keeps the newest
 // envKeepBackups. It returns the new backup's id.
 func saveEnvBackup(name string, orig []byte, perm os.FileMode, now time.Time) (string, error) {
+	id, err := writeEnvBackup(name, orig, perm, now)
+	if err != nil {
+		return "", err
+	}
+	return id, pruneEnvBackups(name)
+}
+
+// writeEnvBackup stores orig as the newest backup, without rotating.
+func writeEnvBackup(name string, orig []byte, perm os.FileMode, now time.Time) (string, error) {
 	if err := migrateLegacyEnvBackup(name); err != nil {
 		return "", err
 	}
@@ -169,19 +192,27 @@ func saveEnvBackup(name string, orig []byte, perm os.FileMode, now time.Time) (s
 	id := newEnvBackupID(dir, now)
 	path := filepath.Join(dir, id+".env")
 	if err := os.WriteFile(path, orig, perm); err != nil {
+		os.Remove(path)
 		return "", err
 	}
 	if err := os.Chmod(path, perm); err != nil {
+		os.Remove(path)
 		return "", err
 	}
+	return id, nil
+}
+
+// pruneEnvBackups drops all but the newest envKeepBackups.
+func pruneEnvBackups(name string) error {
+	dir := envBackupDir(name)
 	ids, err := envBackupIDs(dir)
 	if err != nil {
-		return id, err
+		return err
 	}
 	for i := envKeepBackups; i < len(ids); i++ {
 		os.Remove(filepath.Join(dir, ids[i]+".env"))
 	}
-	return id, nil
+	return nil
 }
 
 // envBackupIDs lists the backup ids in dir, newest first. Ids sort

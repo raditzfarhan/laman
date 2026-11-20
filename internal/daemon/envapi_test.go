@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -199,5 +200,20 @@ func TestEnvFingerprintRequired(t *testing.T) {
 	}
 	if envText(t, dir) != "A=1\n" {
 		t.Error("file changed")
+	}
+}
+
+func TestConfigClearFailureHidesSecrets(t *testing.T) {
+	err := errors.New("exit status 1")
+	cases := map[string]string{
+		"boom at [x]\nmore":                     "php artisan config:clear failed: boom",
+		"Dotenv: failed parsing APP_KEY=abc123": "php artisan config:clear failed: exit status 1",
+		"":                                      "php artisan config:clear failed",
+		"Could not open at [/p/.env]\nline2 secret": "php artisan config:clear failed: Could not open",
+	}
+	for in, want := range cases {
+		if got := configClearFailure(in, err); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
 	}
 }
