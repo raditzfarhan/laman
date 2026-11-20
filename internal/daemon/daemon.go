@@ -126,9 +126,12 @@ type daemon struct {
 	devs       map[string]*devServer // Node dev servers by site host; guarded by mu
 	devRefresh bool                  // a refresh for a dev server change is queued; guarded by mu
 	workers    map[string]*worker    // queue and Reverb workers by kind+"|"+host; guarded by mu
-	quitOnce   sync.Once
-	updates    updater   // laman's own newer release, if any
-	sizes      sizeCache // project folder sizes for the site detail page
+	// workersReady: the start with laman has started the switched-on
+	// workers; from then on a rescan starts those of new sites. Guarded by mu.
+	workersReady bool
+	quitOnce     sync.Once
+	updates      updater   // laman's own newer release, if any
+	sizes        sizeCache // project folder sizes for the site detail page
 	// laragonFound: a Laragon install is at laragon.DefaultRoot, checked at
 	// each refresh so the status stays cheap. Guarded by mu.
 	laragonFound bool
@@ -197,6 +200,7 @@ func Run() error {
 	go srv.Serve(ln)
 	go d.watch(ctx)
 	go d.startAutoDev()
+	go d.startAutoWorkers()
 	go d.watchUpdates(ctx)
 	go d.primePHPLines()
 	logf("laman started (pid %d): Caddy %s, mariadb %q", os.Getpid(), caddyVersion(), d.mariadb)
@@ -338,6 +342,7 @@ func (d *daemon) startService(kind string, s *Service) {
 		defer close(h.done)
 		s.Run(ctx)
 	}()
+	go d.awaitServiceForWorkers(kind, h.done) // workers waiting for it start once it answers
 }
 
 // stopService stops one add-on server and waits for it to exit.
@@ -474,6 +479,9 @@ func (d *daemon) refresh() error {
 		d.cfg.Apps, d.cfg.DBClient = fresh.Apps, fresh.DBClient
 		d.cfg.Theme, d.cfg.Proxies, d.cfg.DevAuto = fresh.Theme, fresh.Proxies, fresh.DevAuto
 		d.cfg.Editor = fresh.Editor
+		d.mu.Lock() // read by workers under mu
+		d.cfg.QueueWorkers, d.cfg.Reverb = fresh.QueueWorkers, fresh.Reverb
+		d.mu.Unlock()
 	}
 	raw, clashes := d.cfg.Discover()
 
@@ -618,6 +626,7 @@ func (d *daemon) refresh() error {
 	d.sites, d.hostsStale, d.tls, d.webErr = list, stale, tlsState, ""
 	d.defaultPHP, d.notes = defaultPHP, notes
 	d.mu.Unlock()
+	d.syncWorkers() // sites gone or back, PHP versions changed
 	return nil
 }
 

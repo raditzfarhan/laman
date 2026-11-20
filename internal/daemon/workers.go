@@ -51,6 +51,9 @@ var (
 	// workerWindow: workerMaxCrashes crashes within it and laman gives up;
 	// a run longer than it forgets earlier crashes.
 	workerWindow = 2 * time.Minute
+	// serviceUpWait: how long a started add-on server has to open its port
+	// before waiting workers are started anyway.
+	serviceUpWait = 30 * time.Second
 )
 
 // restartDelay: 2s, 4s, 8s, 16s, then 30s.
@@ -83,6 +86,7 @@ type worker struct {
 	errMsg  string
 	since   time.Time
 	stop    bool          // stop was asked for: an exit is not a crash
+	gone    bool          // its site disappeared; it is off until the site returns
 	failed  bool          // laman gave up on this run (Reverb never opened its port): its exit is not a crash
 	gen     int           // bumped by each startWorker; older timers and exits are ignored
 	timer   *time.Timer   // a pending restart
@@ -211,7 +215,7 @@ func (d *daemon) startWorker(kind, host string) error {
 		w.timer.Stop()
 		w.timer = nil
 	}
-	w.stop, w.crashes, w.errMsg, w.waiting, w.note = false, nil, "", "", ""
+	w.stop, w.gone, w.crashes, w.errMsg, w.waiting, w.note = false, false, nil, "", "", ""
 	w.state = workerStarting
 	w.mu.Unlock()
 	return d.launchWorker(w, gen, true)
@@ -234,9 +238,14 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 		return err
 	}
 
-	d.mu.Lock()
-	v, _ := d.cfg.PHPFor(site.Name)
-	d.mu.Unlock()
+	// The PHP the site resolved to at its last rescan, so that syncWorkers
+	// can tell when it changes; a site not yet rescanned asks the config.
+	v := site.PHP
+	if v == "" {
+		d.mu.Lock()
+		v, _ = d.cfg.PHPFor(site.Name)
+		d.mu.Unlock()
+	}
 	phpExe := filepath.Join(config.BinDir("php"), v, "php.exe")
 
 	port := 0
@@ -611,4 +620,188 @@ func (d *daemon) stopAllWorkers() {
 			killTree(pid)
 		}
 	}
+}
+
+// active: the worker runs, or is meant to (starting, waiting for a
+// service, or given up on after crashes). Callers hold w.mu.
+func (w *worker) active() bool {
+	switch w.state {
+	case workerRunning, workerStarting, workerWaiting, workerCrashed:
+		return !w.gone
+	}
+	return false
+}
+
+// switchedOn reports whether the site's worker of kind is switched on in the
+// config. Callers hold d.mu.
+func (d *daemon) switchedOn(kind, name string) bool {
+	if kind == workerReverb {
+		return d.cfg.Reverb[name]
+	}
+	return d.cfg.QueueWorkers[name]
+}
+
+// startAutoWorkers starts every switched-on worker, once at daemon start
+// (after the add-on services). From then on syncWorkers also starts
+// switched-on workers of sites that appear.
+func (d *daemon) startAutoWorkers() {
+	type job struct{ kind, host string }
+	var jobs []job
+	d.mu.Lock()
+	d.workersReady = true
+	for _, s := range d.sites {
+		for _, kind := range []string{workerQueue, workerReverb} {
+			if d.switchedOn(kind, s.Name) {
+				jobs = append(jobs, job{kind, s.Host})
+			}
+		}
+	}
+	d.mu.Unlock()
+	for _, j := range jobs {
+		if err := d.startWorker(j.kind, j.host); err != nil {
+			logf("start %s worker for %s: %v", j.kind, j.host, err)
+		}
+	}
+}
+
+// syncWorkers brings the workers in line with the sites after a rescan:
+// workers of a site that is gone are stopped (state off); switched-on ones
+// of a site that (re)appeared are started; active ones whose site now
+// resolves to another PHP version are restarted. It does nothing when
+// nothing changed. The processes are stopped and started outside d.mu.
+func (d *daemon) syncWorkers() {
+	type job struct {
+		kind, host string
+		w          *worker
+	}
+	var gone, start, restart []job
+	d.mu.Lock()
+	byHost := make(map[string]sites.Site, len(d.sites))
+	for _, s := range d.sites {
+		byHost[s.Host] = s
+	}
+	for _, w := range d.workers {
+		w.mu.Lock()
+		s, ok := byHost[w.site.Host]
+		switch {
+		case !ok && !w.gone:
+			gone = append(gone, job{w.kind, w.site.Host, w})
+		case ok && w.gone:
+			if d.switchedOn(w.kind, s.Name) {
+				start = append(start, job{w.kind, s.Host, w})
+			}
+		case ok && w.active() && w.site.PHP != s.PHP:
+			restart = append(restart, job{w.kind, s.Host, w})
+		}
+		w.mu.Unlock()
+	}
+	// Switched-on workers never started: a site that appeared, or a switch
+	// turned on in config.json. Not before the start with laman, which
+	// starts them in its own time.
+	var fresh []job
+	if d.workersReady {
+		for _, s := range d.sites {
+			for _, kind := range []string{workerQueue, workerReverb} {
+				if d.switchedOn(kind, s.Name) && d.workers[workerKey(kind, s.Host)] == nil {
+					fresh = append(fresh, job{kind, s.Host, nil})
+				}
+			}
+		}
+	}
+	d.mu.Unlock()
+
+	for _, j := range gone {
+		logf("%s worker for %s: its site is gone, stopping", j.kind, j.host)
+		d.stopWorkerWait(j.kind, j.host)
+		j.w.mu.Lock()
+		j.w.gone = true
+		if j.w.pid == 0 {
+			j.w.state = workerOff
+		}
+		j.w.mu.Unlock()
+	}
+	for _, j := range restart {
+		logf("%s worker for %s: PHP changed, restarting", j.kind, j.host)
+		if err := d.restartWorker(j.kind, j.host); err != nil {
+			logf("restart %s worker for %s: %v", j.kind, j.host, err)
+		}
+	}
+	for _, j := range fresh {
+		if s, ok := byHost[j.host]; !ok || !exists(filepath.Join(s.Path, "artisan")) {
+			continue // not a Laravel app (any more): nothing to start, nothing to log
+		}
+		start = append(start, j)
+	}
+	for _, j := range start {
+		if err := d.startWorker(j.kind, j.host); err != nil {
+			logf("start %s worker for %s: %v", j.kind, j.host, err)
+		}
+	}
+}
+
+// workersServiceChanged starts the workers waiting for a service; each
+// works out again whether what it needs now runs.
+func (d *daemon) workersServiceChanged() {
+	type job struct{ kind, host string }
+	var jobs []job
+	d.mu.Lock()
+	for _, w := range d.workers {
+		w.mu.Lock()
+		if w.state == workerWaiting && !w.gone {
+			jobs = append(jobs, job{w.kind, w.site.Host})
+		}
+		w.mu.Unlock()
+	}
+	d.mu.Unlock()
+	for _, j := range jobs {
+		if err := d.startWorker(j.kind, j.host); err != nil {
+			logf("start %s worker for %s: %v", j.kind, j.host, err)
+		}
+	}
+}
+
+// restartSiteWorkers restarts a site's active workers, e.g. after its PHP
+// version or .env changed. Stopped and never-started ones are left alone.
+func (d *daemon) restartSiteWorkers(name string) error {
+	site, ok := d.findSite(name)
+	if !ok {
+		return fmt.Errorf("no site %s", name)
+	}
+	var errs []error
+	for _, kind := range []string{workerQueue, workerReverb} {
+		w := d.worker(kind, site.Host)
+		if w == nil {
+			continue
+		}
+		w.mu.Lock()
+		act := w.active()
+		w.mu.Unlock()
+		if act {
+			errs = append(errs, d.restartWorker(kind, site.Host))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// awaitServiceForWorkers waits (up to serviceUpWait) for an add-on server
+// to answer on its port, then starts the workers waiting for a service.
+func (d *daemon) awaitServiceForWorkers(kind string, done <-chan struct{}) {
+	d.mu.Lock()
+	port := serverPort(d.cfg, kind)
+	d.mu.Unlock()
+	if port <= 0 {
+		return // not a service a worker needs (Mailpit)
+	}
+	deadline := time.Now().Add(serviceUpWait)
+	for !portOpen(port) {
+		if time.Now().After(deadline) {
+			break // start them anyway: they back off if it is not there
+		}
+		select {
+		case <-done:
+			return
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	d.workersServiceChanged()
 }

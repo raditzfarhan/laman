@@ -12,6 +12,8 @@ import (
 
 	"laman/internal/config"
 	"laman/internal/sites"
+
+	"golang.org/x/sys/windows"
 )
 
 // workerFixture: a daemon with one Laravel site "acme" in a throwaway
@@ -34,6 +36,7 @@ func newWorkerFixture(t *testing.T, env string, cmd func() *exec.Cmd) *workerFix
 	}
 	f := &workerFixture{dir: dir}
 	f.d = &daemon{cfg: config.Default(), sites: []sites.Site{{Name: "acme", Host: "acme.test", Path: dir}}}
+	f.d.cfg.QueueWorkers, f.d.cfg.Reverb = map[string]bool{}, map[string]bool{}
 
 	oldCmd, oldBackoff, oldWindow := workerCommand, workerBackoff, workerWindow
 	oldStop, oldReady := workerStopWait, workerReadyWait
@@ -312,5 +315,188 @@ func TestReverbPortTimeout(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if n := f.count(); n != 1 {
 		t.Errorf("starts = %d, want 1 (no restart after laman ended it)", n)
+	}
+}
+
+// processAlive reports whether a process with the id is still running.
+func processAlive(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	return windows.GetExitCodeProcess(h, &code) == nil && code == 259 // STILL_ACTIVE
+}
+
+func setSites(d *daemon, list ...sites.Site) {
+	d.mu.Lock()
+	d.sites = list
+	d.mu.Unlock()
+}
+
+func TestWorkersFollowSites(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	f.d.cfg.QueueWorkers["acme"] = true
+	acme := f.d.sites[0]
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	first := f.d.workerState(workerQueue, "acme.test")
+	if first.State != workerRunning || first.PID == 0 {
+		t.Fatalf("after start: %+v", first)
+	}
+
+	setSites(f.d) // the folder is gone
+	f.d.syncWorkers()
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerOff || st.PID != 0 {
+		t.Errorf("after the site went: %+v", st)
+	}
+	if processAlive(first.PID) {
+		t.Errorf("pid %d still runs after the site went", first.PID)
+	}
+	f.d.syncWorkers() // nothing changed: nothing happens
+	if n := f.count(); n != 1 {
+		t.Errorf("starts = %d, want 1", n)
+	}
+
+	setSites(f.d, acme) // it is back
+	f.d.syncWorkers()
+	back := f.d.workerState(workerQueue, "acme.test")
+	if back.State != workerRunning || back.PID == 0 || back.PID == first.PID {
+		t.Fatalf("after the site came back: %+v", back)
+	}
+
+	if err := f.d.restartSiteWorkers("acme"); err != nil {
+		t.Fatal(err)
+	}
+	again := f.d.workerState(workerQueue, "acme.test")
+	if again.State != workerRunning || again.PID == 0 || again.PID == back.PID {
+		t.Errorf("after restartSiteWorkers: %+v (was pid %d)", again, back.PID)
+	}
+	if processAlive(back.PID) {
+		t.Errorf("old pid %d still runs after the restart", back.PID)
+	}
+	if n := f.count(); n != 3 {
+		t.Errorf("starts = %d, want 3", n)
+	}
+}
+
+func TestGoneSiteSwitchedOffStaysOff(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	acme := f.d.sites[0]
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	setSites(f.d)
+	f.d.syncWorkers()
+	setSites(f.d, acme) // back, but its switch is off
+	f.d.syncWorkers()
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerOff {
+		t.Errorf("state = %+v, want off", st)
+	}
+	if n := f.count(); n != 1 {
+		t.Errorf("starts = %d, want 1", n)
+	}
+}
+
+func TestSyncWorkersRestartsOnPHPChange(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	f.d.cfg.QueueWorkers["acme"] = true
+	acme := f.d.sites[0]
+	acme.PHP = "8.3.10"
+	setSites(f.d, acme)
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	first := f.d.workerState(workerQueue, "acme.test")
+
+	f.d.syncWorkers() // same PHP: left alone
+	if st := f.d.workerState(workerQueue, "acme.test"); st.PID != first.PID || f.count() != 1 {
+		t.Fatalf("unchanged PHP restarted the worker: %+v, starts %d", st, f.count())
+	}
+
+	acme.PHP = "8.4.1"
+	setSites(f.d, acme)
+	f.d.syncWorkers()
+	st := f.d.workerState(workerQueue, "acme.test")
+	if st.State != workerRunning || st.PID == first.PID || f.count() != 2 {
+		t.Errorf("after the PHP change: %+v, starts %d", st, f.count())
+	}
+}
+
+func TestSyncWorkersLeavesStoppedAlone(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	f.d.cfg.QueueWorkers["acme"] = true
+	acme := f.d.sites[0]
+	acme.PHP = "8.3.10"
+	setSites(f.d, acme)
+	f.d.startAutoWorkers()
+	f.d.stopWorker(workerQueue, "acme.test")
+	acme.PHP = "8.4.1"
+	setSites(f.d, acme)
+	f.d.syncWorkers()
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerStopped {
+		t.Errorf("state = %+v, want stopped", st)
+	}
+	if n := f.count(); n != 1 {
+		t.Errorf("starts = %d, want 1", n)
+	}
+}
+
+func TestStartAutoWorkers(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	other := t.TempDir()
+	os.WriteFile(filepath.Join(other, "artisan"), []byte("<?php\n"), 0o644)
+	os.WriteFile(filepath.Join(other, ".env"), []byte("QUEUE_CONNECTION=sqs\n"), 0o644)
+	setSites(f.d, f.d.sites[0], sites.Site{Name: "beta", Host: "beta.test", Path: other})
+	f.d.cfg.QueueWorkers["acme"] = true
+
+	f.d.syncWorkers() // before the start with laman: nothing starts
+	if n := f.count(); n != 0 {
+		t.Fatalf("starts before startAutoWorkers = %d, want 0", n)
+	}
+	f.d.startAutoWorkers()
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerRunning {
+		t.Errorf("acme queue: %+v", st)
+	}
+	for _, c := range []struct{ kind, host string }{{workerReverb, "acme.test"}, {workerQueue, "beta.test"}, {workerReverb, "beta.test"}} {
+		if st := f.d.workerState(c.kind, c.host); st.State != workerOff {
+			t.Errorf("%s %s: %+v, want off", c.kind, c.host, st)
+		}
+	}
+	if n := f.count(); n != 1 {
+		t.Errorf("starts = %d, want 1", n)
+	}
+
+	// Switched on later (config reload): the next sync starts it.
+	f.d.cfg.QueueWorkers["beta"] = true
+	f.d.syncWorkers()
+	if st := f.d.workerState(workerQueue, "beta.test"); st.State != workerRunning {
+		t.Errorf("beta queue after sync: %+v", st)
+	}
+	if n := f.count(); n != 2 {
+		t.Errorf("starts = %d, want 2", n)
+	}
+}
+
+func TestWorkersServiceChanged(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=redis\nREDIS_HOST=127.0.0.1\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerWaiting {
+		t.Fatalf("before: %+v", st)
+	}
+	f.d.workersServiceChanged() // Redis still off
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerWaiting || f.count() != 0 {
+		t.Fatalf("with Redis off: %+v, starts %d", st, f.count())
+	}
+	f.d.mu.Lock()
+	f.d.handles = map[string]*handle{"redis": {}}
+	f.d.mu.Unlock()
+	f.d.workersServiceChanged()
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerRunning || f.count() != 1 {
+		t.Errorf("after Redis came up: %+v, starts %d", st, f.count())
 	}
 }
