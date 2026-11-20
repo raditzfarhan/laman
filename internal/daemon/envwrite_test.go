@@ -32,17 +32,22 @@ func TestWriteEnvKeysKeepsEverythingElse(t *testing.T) {
 		t.Fatal(err)
 	}
 	kvs := []envKV{{"REVERB_HOST", "acme.test"}, {"REVERB_PORT", "443"}, {"REVERB_SCHEME", "https"}}
-	if err := writeEnvKeys(path, kvs); err != nil {
-		t.Fatal(err)
+	backup := filepath.Join(t.TempDir(), "env-backups", "acme.env")
+	if wrote, err := writeEnvKeys(path, backup, kvs); err != nil || !wrote {
+		t.Fatal(wrote, err)
 	}
 	got, _ := os.ReadFile(path)
 	want := "APP_NAME=Acme\r\nREVERB_HOST=acme.test\r\n# REVERB_PORT=1\r\nREVERB_HOST_X=keep\r\n  export REVERB_SCHEME=https\r\nREVERB_APP_KEY=abc\r\nLAST=1\r\nREVERB_PORT=443\r\n"
 	if string(got) != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
-	bak, _ := os.ReadFile(path + ".laman-backup")
+	bak, _ := os.ReadFile(backup)
 	if string(bak) != orig {
 		t.Fatalf("backup %q", bak)
+	}
+	// Nothing new in the project folder besides .env itself.
+	if ents, _ := os.ReadDir(dir); len(ents) != 1 {
+		t.Errorf("project folder holds %d entries, want only .env", len(ents))
 	}
 }
 
@@ -59,13 +64,14 @@ func TestWriteEnvKeysNoChangeKeepsBackup(t *testing.T) {
 	orig := "A=1\nREVERB_HOST=old\n"
 	os.WriteFile(path, []byte(orig), 0o644)
 	kvs := []envKV{{"REVERB_HOST", "acme.test"}}
-	if err := writeEnvKeys(path, kvs); err != nil {
-		t.Fatal(err)
+	backup := filepath.Join(t.TempDir(), "acme.env")
+	if wrote, err := writeEnvKeys(path, backup, kvs); err != nil || !wrote {
+		t.Fatal(wrote, err)
 	}
-	if err := writeEnvKeys(path, kvs); err != nil {
-		t.Fatal(err)
+	if wrote, err := writeEnvKeys(path, backup, kvs); err != nil || wrote {
+		t.Fatal("second write:", wrote, err)
 	}
-	bak, _ := os.ReadFile(path + ".laman-backup")
+	bak, _ := os.ReadFile(backup)
 	if string(bak) != orig {
 		t.Fatalf("backup %q", bak)
 	}
@@ -75,14 +81,15 @@ func TestWriteEnvKeysRefusesBareCR(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	orig := "A=1\rB=2\r\nC=3\n"
 	os.WriteFile(path, []byte(orig), 0o644)
-	if err := writeEnvKeys(path, []envKV{{"A", "9"}}); err == nil {
+	backup := filepath.Join(t.TempDir(), "acme.env")
+	if _, err := writeEnvKeys(path, backup, []envKV{{"A", "9"}}); err == nil {
 		t.Fatal("want error")
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != orig {
 		t.Fatalf("file changed: %q", got)
 	}
-	if _, err := os.Stat(path + ".laman-backup"); err == nil {
+	if _, err := os.Stat(backup); err == nil {
 		t.Fatal("backup written")
 	}
 }

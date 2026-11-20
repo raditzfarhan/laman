@@ -753,7 +753,7 @@ func TestReverbEnvRouteNeedsKey(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(f.dir, ".env")); string(b) != env {
 		t.Errorf(".env changed: %q", b)
 	}
-	if exists(filepath.Join(f.dir, ".env.laman-backup")) {
+	if exists(envBackupPath("acme")) {
 		t.Errorf("backup written")
 	}
 }
@@ -782,13 +782,26 @@ func TestReverbEnvRouteWrites(t *testing.T) {
 	var reply struct {
 		Changed      []string `json:"changed"`
 		ConfigCached bool     `json:"configCached"`
+		Backup       string   `json:"backup"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &reply)
 	if len(reply.Changed) != 9 || reply.ConfigCached {
 		t.Errorf("reply = %+v", reply)
 	}
-	if b, _ := os.ReadFile(filepath.Join(f.dir, ".env.laman-backup")); !strings.Contains(string(b), "REVERB_PORT=443\n") {
+	want := filepath.Join(config.DataDir(), "env-backups", "acme.env")
+	if reply.Backup != want {
+		t.Errorf("reply backup = %q, want %q", reply.Backup, want)
+	}
+	if b, _ := os.ReadFile(want); !strings.Contains(string(b), "REVERB_PORT=443\n") {
 		t.Errorf("backup = %q, want the .env before the write", b)
+	}
+	// Nothing new in the project besides .env itself.
+	if ents, _ := os.ReadDir(f.dir); len(ents) != 2 { // artisan, .env
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Errorf("project folder holds %v, want only artisan and .env", names)
 	}
 	if n := f.count(); n != 2 {
 		t.Errorf("starts after a change = %d, want 2 (the running queue worker restarted)", n)

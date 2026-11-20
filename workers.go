@@ -128,6 +128,7 @@ func cmdWorker(kind string, args []string) error {
 		var r struct {
 			Changed      []string `json:"changed"`
 			ConfigCached bool     `json:"configCached"`
+			Backup       string   `json:"backup"`
 		}
 		if err := json.Unmarshal(b, &r); err != nil {
 			return err
@@ -136,6 +137,9 @@ func cmdWorker(kind string, args []string) error {
 			fmt.Printf("%s's .env is already set up for Reverb.\n", s.Host)
 		} else {
 			fmt.Printf("Updated %s's .env: %s\n", s.Host, strings.Join(r.Changed, ", "))
+			if r.Backup != "" {
+				fmt.Printf("Previous .env saved to %s\n", r.Backup)
+			}
 			fmt.Println("Restart Vite (npm run dev) or rebuild so the browser picks up the new values.")
 		}
 		if r.ConfigCached {

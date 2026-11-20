@@ -6,10 +6,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"laman/internal/config"
 )
 
 // The only place laman edits a file of the user's project: it sets the
-// Reverb keys in the project's .env, after a backup, and touches nothing else.
+// Reverb keys in the project's .env, after a backup kept in laman's own data
+// folder (never in the project), and touches nothing else.
 
 type envKV struct{ Key, Value string }
 
@@ -62,20 +65,22 @@ func keyLinePrefix(line, key string) (string, bool) {
 	return "", false
 }
 
-// writeEnvKeys backs path up to path+".laman-backup", then replaces the first
-// line of each key in place (keeping indentation and any `export `), appends
-// missing keys, and writes the result atomically. Every other byte is kept.
-func writeEnvKeys(path string, kvs []envKV) error {
+// writeEnvKeys replaces the first line of each key in path in place
+// (keeping indentation and any `export `), appends missing keys, and writes
+// the result atomically. Every other byte is kept. When that changes the
+// file, the file as it was is first copied to backup (overwriting it, with
+// the file's permission bits); wrote reports whether it changed.
+func writeEnvKeys(path, backup string, kvs []envKV) (wrote bool, err error) {
 	orig, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if strings.Contains(strings.ReplaceAll(string(orig), "\r\n", ""), "\r") {
-		return errors.New("unusual line endings in .env; edit it by hand")
+		return false, errors.New("unusual line endings in .env; edit it by hand")
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	perm := fi.Mode().Perm()
 	eol := "\n"
@@ -107,18 +112,22 @@ func writeEnvKeys(path string, kvs []envKV) error {
 
 	out := strings.Join(lines, "")
 	if out == string(orig) {
-		return nil
+		return false, nil
 	}
-	if err := os.WriteFile(path+".laman-backup", orig, perm); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
+		return false, err
 	}
-	if err := os.Chmod(path+".laman-backup", perm); err != nil {
-		return err
+	if err := os.WriteFile(backup, orig, perm); err != nil {
+		return false, err
+	}
+	if err := os.Chmod(backup, perm); err != nil {
+		return false, err
 	}
 
+	// Next to .env so the rename is atomic; it becomes .env (or is removed).
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".env.laman-*")
 	if err != nil {
-		return err
+		return false, err
 	}
 	name := tmp.Name()
 	_, werr := tmp.WriteString(out)
@@ -127,15 +136,21 @@ func writeEnvKeys(path string, kvs []envKV) error {
 	}
 	if werr != nil {
 		os.Remove(name)
-		return werr
+		return false, werr
 	}
 	if err := os.Chmod(name, perm); err != nil {
 		os.Remove(name)
-		return err
+		return false, err
 	}
 	if err := os.Rename(name, path); err != nil {
 		os.Remove(name)
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
+}
+
+// envBackupPath is where laman keeps a site's .env as it was before laman's
+// last change to it: in laman's data folder, not in the project.
+func envBackupPath(name string) string {
+	return filepath.Join(config.DataDir(), "env-backups", name+".env")
 }

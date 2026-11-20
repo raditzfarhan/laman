@@ -939,11 +939,13 @@ func (d *daemon) reverbWant(s sites.Site, reverbPort int) []envKV {
 	return reverbEnv(s.Host, scheme, port, reverbPort)
 }
 
-// reverbEnvReply: the .env keys laman wrote, and whether Laravel's config is
-// cached (the new values then need `php artisan config:clear`).
+// reverbEnvReply: the .env keys laman wrote, where the .env as it was went
+// (only when laman changed it), and whether Laravel's config is cached (the
+// new values then need `php artisan config:clear`).
 type reverbEnvReply struct {
 	Changed      []string `json:"changed"`
 	ConfigCached bool     `json:"configCached"`
+	Backup       string   `json:"backup,omitempty"`
 }
 
 // setupReverbEnv writes laman's Reverb values into the site's .env and
@@ -968,9 +970,14 @@ func (d *daemon) setupReverbEnv(s sites.Site) (reverbEnvReply, error) {
 	}
 	want := d.reverbWant(s, rp)
 	changed := envMismatch(vals, want)
+	backup := ""
 	if len(changed) > 0 {
-		if err := writeEnvKeys(filepath.Join(s.Path, ".env"), want); err != nil {
+		wrote, err := writeEnvKeys(filepath.Join(s.Path, ".env"), envBackupPath(s.Name), want)
+		if err != nil {
 			return reverbEnvReply{}, err
+		}
+		if wrote {
+			backup = envBackupPath(s.Name)
 		}
 		if err := d.restartSiteWorkers(s.Name); err != nil {
 			logf("restarting workers of %s after its .env changed: %v", s.Host, err)
@@ -978,7 +985,7 @@ func (d *daemon) setupReverbEnv(s sites.Site) (reverbEnvReply, error) {
 	} else {
 		changed = []string{}
 	}
-	return reverbEnvReply{Changed: changed, ConfigCached: exists(filepath.Join(s.Path, "bootstrap", "cache", "config.php"))}, nil
+	return reverbEnvReply{Changed: changed, Backup: backup, ConfigCached: exists(filepath.Join(s.Path, "bootstrap", "cache", "config.php"))}, nil
 }
 
 // switchWorkerOff stops a worker that was switched off; it then shows as

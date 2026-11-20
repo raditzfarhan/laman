@@ -785,7 +785,7 @@ async function setupReverbEnv(host) {
   await workerAction(host, "reverb", "/api/reverb/env", {}, (r) => {
     const changed = r.changed || [];
     alertNote(changed.length
-      ? `Set up ${host}'s .env for Reverb: ${changed.length > 3 ? `${changed.length} lines` : changed.join(", ")} changed (the old file is .env.laman-backup). Restart Vite (npm run dev) or rebuild so the browser picks up the new values.`
+      ? `Set up ${host}'s .env for Reverb: ${changed.length > 3 ? `${changed.length} lines` : changed.join(", ")} changed.${r.backup ? ` Previous .env saved to ${r.backup}.` : ""} Restart Vite (npm run dev) or rebuild so the browser picks up the new values.`
       : `${host}'s .env was already set up for laman.`, "note info");
     if (r.configCached) alertNote(`${host}'s config is cached — run php artisan config:clear so Laravel reads the new .env.`, "note warn");
   });
@@ -836,7 +836,7 @@ function workerRow(s, kind, w) {
     if (w.needsInstall) subs.push(el("span", { class: "wk-env" }, "Run ", el("code", {}, "php artisan reverb:install"), " first"));
     else if (w.envOK) subs.push(el("span", { class: "wk-env ok" }, ".env ✓ set up for laman"));
     else if (w.url) subs.push(el("span", { class: "wk-env warn", title: (w.envMismatch || []).join(", ") }, ".env points elsewhere",
-      el("button", { class: "inline", disabled: busy, title: `Write the Reverb lines in ${host}'s .env (a copy goes to .env.laman-backup first): ${(w.envMismatch || []).join(", ")}`,
+      el("button", { class: "inline", disabled: busy, title: `Write the Reverb lines in ${host}'s .env (the old one is first copied to laman's data folder): ${(w.envMismatch || []).join(", ")}`,
         onclick: () => setupReverbEnv(host) }, "Set up .env")));
   }
   return el("div", { class: "wk" },
