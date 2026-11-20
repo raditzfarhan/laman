@@ -158,7 +158,7 @@ func TestEnvCreateAndAppKey(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatal(rec.Code, rec.Body)
 	}
-	if !regexp.MustCompile(`(?m)^APP_KEY=base64:[A-Za-z0-9+/]{43}="?\r?$`).MatchString(envText(t, dir)) {
+	if !regexp.MustCompile(`(?m)^APP_KEY=base64:[A-Za-z0-9+/]{43}=\r?$`).MatchString(envText(t, dir)) {
 		t.Errorf("%q", envText(t, dir))
 	}
 	var ak envSaveReply
