@@ -243,6 +243,29 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .sd-right button { font-size: 13px; padding: 5px 12px; }
 .sd-empty { color: var(--muted); }
 .sd-gone { padding: 40px 0; display: grid; gap: 10px; justify-items: start; }
+/* Workers: one row per worker (name, switch, state, what it runs, actions) */
+.sd-workers { margin-top: 14px; }
+.wk { display: grid; grid-template-columns: 160px auto minmax(0, 1fr) auto; align-items: center; gap: 8px 18px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.wk:last-child { border-bottom: 0; }
+.wk-name { display: grid; font-weight: 650; }
+.wk-name .muted { font-size: 12px; font-weight: 400; }
+.wk-info { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-width: 0; }
+.wk-what { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.wk-hint { font-size: 13px; color: var(--ink); display: inline-flex; align-items: center; gap: 8px; }
+.wk-hint::before { content: ""; width: 7px; height: 7px; flex: none; transform: rotate(45deg); background: var(--genting); }
+.wk-acts { display: flex; align-items: center; gap: 12px; justify-self: end; }
+.wk-acts button:not(.linkish) { padding: 4px 12px; font-size: 13px; min-width: 72px; }
+.wk-sub { grid-column: 3 / -1; display: grid; gap: 4px; font-size: 13px; margin-top: -2px; }
+.wk-env { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.wk-env.ok { color: var(--ok); }
+.wk-env.warn { color: var(--warn); }
+.wk-env button.inline { padding: 2px 10px; font-size: 13px; background: var(--warn-bg); color: var(--warn); border-color: currentColor; }
+.wk .devout { margin-top: 4px; }
+@media (max-width: 720px) {
+  .wk { grid-template-columns: minmax(0, 1fr) auto; }
+  .wk-info, .wk-sub { grid-column: 1 / -1; }
+  .wk-acts { grid-column: 1 / -1; justify-self: start; }
+}
 @media (max-width: 860px) {
   .sd-graph { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
   .sd-wires { display: none; }
@@ -400,6 +423,8 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .queue .row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 18px; }
 .queue .qsite { display: block; font-size: 16px; font-weight: 650; color: var(--ink); }
 .queue .qname { display: block; font: 12px var(--mono); color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.queue .noworker { display: inline-block; margin-top: 4px; font-size: 13px; color: var(--warn); text-decoration: none; }
+.queue .noworker:hover { text-decoration: underline; text-underline-offset: 3px; }
 .queue .counts { display: flex; gap: 18px; }
 .queue .stat { display: grid; justify-items: end; }
 .queue .stat b { font: 600 18px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }

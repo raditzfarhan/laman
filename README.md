@@ -311,6 +311,26 @@ With Mailpit installed (`laman setup` does it), laman runs it next to PHP and Ma
 - **Queues:** the dashboard's **Queues** view shows the Laravel jobs of every site, whether it queues in Redis (`QUEUE_CONNECTION=redis`) or in its own database (`database`, Laravel's default). Only queues with something waiting, delayed, running or failed get a row, failures first; the other sites fold into **Idle**, **Not checked** (with the reason, e.g. a database on another server or no `jobs` table) and other drivers such as `sync`. **Show jobs** lists the jobs by class with their age and attempts, and failed ones with the first line of their error. **Clear** (two clicks, Redis queues only) deletes the waiting and delayed jobs. laman reads each site's `.env` the way Laravel does (`DB_CONNECTION`, `DB_QUEUE_CONNECTION`, `DB_QUEUE_TABLE`, `DB_*`; for Redis `REDIS_PREFIX`, else `APP_NAME`, and `REDIS_DB`) and only reads: MySQL/MariaDB, PostgreSQL and SQLite databases on this computer, through laman's default PHP, while the page is open.
 - **Where it comes from:** Redis has no official Windows build. laman uses [redis-windows](https://github.com/redis-windows/redis-windows), which builds current Redis with MSYS2 in public GitHub Actions, and checks it against the SHA-256 GitHub records. php.net publishes the phpredis builds without checksums, so laman relies on HTTPS from php.net for those.
 
+## Queue workers and Reverb
+
+laman can run a Laravel site's queue worker and its [Reverb](https://reverb.laravel.com) WebSocket server for you, kept alive in the background, with no terminal left open. Each is a switch per site, off until you turn it on.
+
+```
+laman queue on|off|restart|status|log [site]          # the queue worker (default: the current folder's site)
+laman reverb on|off|restart|status|log|env [site]     # Reverb; env sets up the site's .env for it
+```
+
+- **In the dashboard:** a Laravel site's page (click its name on Home) has a **Workers** section: one row per worker with its switch, state and uptime, what it runs, **Restart** and **Log** (the last lines of output). The page suggests a switch when it sees one would help: a `.env` that queues jobs, or `laravel/reverb` in `composer.json`. The **Queues** view marks a queue with waiting jobs and no worker as **No worker running**, linking to the site's page.
+- **The queue worker** runs `php artisan queue:listen --tries=1 --timeout=0` (the flags of Laravel's own `composer run dev`) with the site's PHP, in the project folder. `queue:listen` rather than `queue:work` because it loads your code fresh for every job, so edits apply without a restart. It runs the default queue of the default connection. With `QUEUE_CONNECTION=sync` (or `null`) jobs run inline and the switch stays off.
+- **Horizon** needs `pcntl`/`posix`, which PHP on Windows doesn't have, so for a project with `laravel/horizon` laman runs `queue:listen` instead, on the queues named in `config/horizon.php` when it can read them. The row says so.
+- **Needs a server:** a worker whose queue is in laman's Redis, MariaDB or PostgreSQL waits while that server is off (**waiting · Redis is off**) and starts by itself when it comes up.
+- **Reverb** runs `php artisan reverb:start` on a port laman gives the site (8100–8199, kept from then on), and Caddy sends the Pusher paths (`/app`, `/app/*`, `/apps/*`) on the site's own address to it. Browsers connect to `wss://<site>.test/app` (or `ws://` without HTTPS), the same origin as the page, as in production. A route of your own under `/app` doesn't work while Reverb is on.
+- **Set up .env:** **Set up .env** on the Reverb row, or `laman reverb env`, writes `BROADCAST_CONNECTION=reverb` and the `REVERB_HOST/PORT/SCHEME`, `REVERB_SERVER_HOST/PORT` and `VITE_REVERB_HOST/PORT/SCHEME` lines laman needs. It changes those lines in place and adds missing ones at the end; it leaves everything else, including `REVERB_APP_ID/KEY/SECRET`, untouched. The `.env` as it was goes to `.env.laman-backup` first (overwritten each time). Run `php artisan reverb:install` first if the project has no Reverb keys yet. Afterwards, restart Vite (`npm run dev`) or rebuild so the browser gets the new values, and run `php artisan config:clear` if the config is cached. The Reverb row shows **.env ✓ set up for laman**, or **.env points elsewhere** when the values differ.
+- **Staying up:** a worker that exits is started again after 2 s, then 4, 8, 16 and 30 s. After 5 quick crashes in 2 minutes laman stops trying and shows **crashed** with the last output. Switched-on workers start with laman and stop with it; stopping ends the whole process tree.
+- **Code changes:** Reverb (and anything else that keeps your code in memory) needs **Restart** after you change the code. Changing the site's PHP version or setting up `.env` restarts its running workers.
+- **Logs:** `~/.laman/logs/queue-<site>.log` and `reverb-<site>.log`.
+- **Not (yet):** Reverb through `laman share` links (the frontend has the `.test` address built in), the scheduler (`schedule:work`), and custom `--queue=` lists.
+
 ## Sharing a site
 
 `laman share` (in a project folder, or `laman share blog`) gives the site a public HTTPS link such as `https://random-words.trycloudflare.com`, through a free [Cloudflare quick tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/). No account is needed. Useful for showing work to a client, testing on a phone, or receiving webhooks. In the dashboard, each site has a **Share** button, and a shared site shows its link with **Copy link** and **Stop sharing**.
@@ -386,6 +406,8 @@ The icon, tray mark and dashboard colours come from `../logo/kit` (see its `USAG
 | `laman share [site] [--as name] [--quick]` / `share stop [site]` / `share list` | Share a site on a public HTTPS link (see [Sharing a site](#sharing-a-site)) |
 | `laman share setup <domain> [--pattern {site}-dev]` / `share setup off` | Share on your own Cloudflare domain instead of random links |
 | `laman dev [start\|stop\|log] [site]` / `dev auto on\|off [site]` | Run a Node app's dev server behind its `.test` name (see [JavaScript apps](#javascript-apps-dev-servers)) |
+| `laman queue on\|off\|restart\|status\|log [site]` | Run a Laravel site's queue worker in the background (see [Queue workers and Reverb](#queue-workers-and-reverb)) |
+| `laman reverb on\|off\|restart\|status\|log\|env [site]` | Run a Laravel site's Reverb server at `wss://<site>.test/app`; `env` sets up its `.env` |
 | `laman proxy <name> <port>` / `proxy remove <name>` / `proxy` | Serve `<name>.test` from a port on this computer |
 | `laman install node [22]` / `laman use node 22` | Install Node.js (newest LTS by default) and set the default behind plain `node`/`npm`/`npx` |
 | `laman node\|npm\|npx [args]` | Run with the project's Node: `.nvmrc` / `.node-version`, else `engines.node`, else the default |

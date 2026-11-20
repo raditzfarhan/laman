@@ -190,9 +190,27 @@ function draw(force) {
   if (currentView() === "site") {
     const host = siteHost();
     const qrows = (queues?.queues || []).filter((q) => q.site === host);
-    if (changed("site", [host, detail, detailErr, status.sites.find((x) => x.host === host), status.php, installed, shares, opening, copied, shareOpts,
-      status.shareDomain, status.editor, devShape.find((x) => x.host === host), devBusy[host], qrows, vers?.job, status.mailUrl, status.httpsTrusted, status.httpsPort, status.httpPort]))
+    // Only what the Queue card shows: running jobs come and go every poll.
+    const qn = (k) => qrows.reduce((n, q) => n + (q[k] || 0), 0);
+    const qsum = [qn("waiting") + qn("delayed"), qn("failed")];
+    if (changed("site", [host, detailShape(detail), detailErr, wkBusy, [...wkOpen], status.sites.find((x) => x.host === host), status.php, installed, shares, opening, copied, shareOpts,
+      status.shareDomain, status.editor, devShape.find((x) => x.host === host), devBusy[host], qsum, vers?.job, status.mailUrl, status.httpsTrusted, status.httpsPort, status.httpPort]))
       renderSiteDetail(installed, shares, qrows);
+    // Worker uptimes and logs change every poll: updated in place.
+    const wk = detail?.workers;
+    for (const n of document.querySelectorAll("[data-wkup]")) {
+      const up = wk?.[n.dataset.wkup.split("|")[1]]?.status.uptime;
+      const text = up ? ` · ${goSpan(up)}` : "";
+      if (n.textContent !== text) n.textContent = text;
+    }
+    for (const pre of document.querySelectorAll("[data-wkout]")) {
+      const text = wkOut[pre.dataset.wkout] ?? "Loading…";
+      if (pre.textContent !== text) {
+        const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+        pre.textContent = text;
+        if (atEnd) pre.scrollTop = pre.scrollHeight;
+      }
+    }
   }
   $("sites").hidden = ownSites.length === 0;
   $("nosites").hidden = ownSites.length > 0;
@@ -531,6 +549,7 @@ async function loadDetail() {
     detail = d;
     detailErr = "";
     if (d.facts.queue) loadQueues(); // renders itself
+    await loadWorkerLogs(host);
   } catch (e) {
     if (host !== siteHost()) return;
     detail = null;
@@ -591,7 +610,13 @@ function detailNodes(s, installed, qrows) {
   if (f.queue) {
     const sum = (k) => qrows.reduce((n, q) => n + (q[k] || 0), 0);
     const waiting = sum("waiting") + sum("delayed"), failed = sum("failed");
-    const sub = waiting || failed ? [`${waiting} waiting`, failed ? `${failed} failed` : ""].filter(Boolean).join(" · ") : "Nothing waiting";
+    const jobs = waiting || failed ? [`${waiting} waiting`, failed ? `${failed} failed` : ""].filter(Boolean).join(" · ") : "Nothing waiting";
+    // The worker laman runs for it (Laravel sites; see Workers below).
+    const wq = detail.workers?.laravel ? detail.workers.queue : null;
+    const ws = wq?.status?.state;
+    const worker = !wq ? null : !wq.on ? (wq.inline ? null : "no worker")
+      : ws === "running" ? "worker running" : ws === "waiting" ? `worker waiting: ${wq.status.waiting || ""}` : `worker ${ws || "off"}`;
+    const sub = worker ? [jobs, worker].join(" · ") : jobs;
     nodes.push({ tile: icon("stack"), title: "Queue", badge: f.queue.driver, sub,
       right: el("a", { class: "btn", href: "#queues" }, "Queues →") });
   }
@@ -686,7 +711,7 @@ function renderSiteDetail(installed, shares, qrows) {
   const job = vers?.job || {};
   const ours = siteJobHost === s.host || (job.running && (job.message || "").includes(` for ${s.host}`));
   const jobLine = el("p", { class: "job" + (ours && job.error ? " err" : ""), role: "status" }, ours ? jobText("site", job) : "");
-  box.replaceChildren(head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph, jobLine);
+  box.replaceChildren(head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph, jobLine, ...[workersBlock(s)].filter(Boolean));
   wireObs.disconnect();
   wireObs.observe(graph);
   drawWires();
@@ -706,6 +731,128 @@ function drawWires() {
     return `<path${n.classList.contains("missing") ? ' class="miss"' : ""} d="M${x0} ${y0} C${x0 + dx} ${y0} ${x1 - dx} ${y1} ${x1} ${y1}"/>`;
   });
   svgEl.innerHTML = paths.length ? paths.join("") + `<circle cx="${x0}" cy="${y0}" r="4.5"/>` : "";
+}
+
+// ---- Site detail: Workers (Laravel sites) ----
+// The queue worker and Reverb laman runs for a site when switched on.
+const wkOpen = new Set();  // "host|kind" whose log is shown
+const wkOut = {};          // "host|kind" -> last lines of output
+let wkBusy = {};           // "host|kind" -> true while a request runs
+const WK_NAMES = { queue: "Queue worker", reverb: "Reverb" };
+
+// Go durations ("1h2m3s") as the short spans used elsewhere ("1h", "12m").
+function goSpan(d) {
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?$/.exec(d || "");
+  if (!m || !d) return d || "";
+  return fmtSpan(Math.round((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0)));
+}
+// The detail as the page draws it: uptimes are updated in place instead.
+const detailShape = (d) => {
+  if (!d?.workers) return d;
+  const noUp = (w) => ({ ...w, status: { ...w.status, uptime: undefined } });
+  return { ...d, workers: { ...d.workers, queue: noUp(d.workers.queue), reverb: noUp(d.workers.reverb) } };
+};
+
+async function loadWorkerLogs(host) {
+  for (const key of wkOpen) {
+    const [h, kind] = key.split("|");
+    if (h !== host) continue;
+    try { wkOut[key] = String(await api("GET", `/api/workers/${kind}/log?site=${encodeURIComponent(h)}`)).replace(/^\s*\n|\s+$/g, ""); } catch (e) { wkOut[key] = e.message; }
+  }
+}
+
+async function workerAction(host, kind, path, body, done) {
+  const key = `${host}|${kind}`;
+  wkBusy = { ...wkBusy, [key]: true };
+  render();
+  lastAct = Date.now();
+  try {
+    const out = await api("POST", path, { site: host, ...body });
+    if (done) done(out);
+  } catch (e) { alertNote(e.message); }
+  const { [key]: _, ...rest } = wkBusy;
+  wkBusy = rest;
+  await loadDetail();
+}
+
+async function setupReverbEnv(host) {
+  await workerAction(host, "reverb", "/api/reverb/env", {}, (r) => {
+    const changed = r.changed || [];
+    alertNote(changed.length
+      ? `Set up ${host}'s .env for Reverb: ${changed.length > 3 ? `${changed.length} lines` : changed.join(", ")} changed (the old file is .env.laman-backup). Restart Vite (npm run dev) or rebuild so the browser picks up the new values.`
+      : `${host}'s .env was already set up for laman.`, "note info");
+    if (r.configCached) alertNote(`${host}'s config is cached — run php artisan config:clear so Laravel reads the new .env.`, "note warn");
+  });
+}
+
+// One worker's state, as the state dot and text (uptime updated in place).
+function workerState(host, kind, w, hint) {
+  const st = w.status || {};
+  if (!w.on) return hint ? el("span", { class: "wk-hint" }, hint) : el("span", { class: "devstate stopped" }, w.installed === false ? "not in this project" : "off");
+  const text = { running: "running", starting: "starting…", waiting: st.waiting || "waiting", crashed: "crashed", stopped: "stopped", off: "off" }[st.state] || st.state || "off";
+  return el("span", { class: `devstate ${st.state === "waiting" ? "starting" : st.state || "stopped"}`, title: st.command || "" }, text,
+    st.state === "running" ? el("span", { "data-wkup": `${host}|${kind}` }, st.uptime ? ` · ${goSpan(st.uptime)}` : "") : null);
+}
+
+function workerRow(s, kind, w) {
+  const host = s.host, key = `${host}|${kind}`, st = w.status || {};
+  const busy = !!wkBusy[key];
+  const open = wkOpen.has(key);
+  const queue = kind === "queue";
+  const installed = queue || w.installed;
+  const inline = queue && w.inline;
+  const driver = detail.facts.queue?.driver;
+  // What the switch would do while it is off.
+  const canOn = installed && !inline;
+  const tip = queue
+    ? inline ? w.note : `Run php artisan queue:listen for ${host} while laman runs; it picks up code changes per job`
+    : !installed ? `laravel/reverb isn't in ${host}'s composer.json`
+    : `Run php artisan reverb:start for ${host} while laman runs, and send ${host}/app/* to it (a route of your own under /app stops working while this is on)`;
+  const input = el("input", { type: "checkbox", role: "switch", "aria-label": `${WK_NAMES[kind]} for ${host} runs with laman`, checked: !!w.on, disabled: busy || (!w.on && !canOn) });
+  input.onchange = () => {
+    input.disabled = true;
+    workerAction(host, kind, `/api/workers/${kind}/switch`, { on: input.checked });
+  };
+  const hint = !w.on && w.suggest
+    ? queue ? `This site queues jobs${driver ? ` (${driver})` : ""}: switch on to run them` : "Reverb is installed: switch on to run it"
+    : "";
+  const cmd = (st.command || "").replace(/^php artisan /, "");
+  const what = queue
+    ? el("span", { class: "wk-what mono", title: st.command || "php artisan queue:listen --tries=1 --timeout=0" }, `${(cmd.split(" ")[0]) || "queue:listen"}${driver ? ` (${driver})` : ""}`)
+    : el("span", { class: "wk-what mono", title: st.command || "" }, [w.port ? `port ${w.port}` : "", w.on ? w.url : ""].filter(Boolean).join(" · "));
+  const subs = [];
+  if (w.on && st.state === "crashed" && st.error) subs.push(el("span", { class: "err" }, st.error));
+  const note = w.note || st.note;
+  if (queue && note) subs.push(el("span", { class: "muted" }, note));
+  // queue:listen loads the code per job (also for Horizon projects); Reverb keeps it in memory.
+  if (w.on && !queue) subs.push(el("span", { class: "muted" }, "Restart after code changes: it keeps your code in memory."));
+  if (!queue && w.on) {
+    if (w.needsInstall) subs.push(el("span", { class: "wk-env" }, "Run ", el("code", {}, "php artisan reverb:install"), " first"));
+    else if (w.envOK) subs.push(el("span", { class: "wk-env ok" }, ".env ✓ set up for laman"));
+    else if (w.url) subs.push(el("span", { class: "wk-env warn", title: (w.envMismatch || []).join(", ") }, ".env points elsewhere",
+      el("button", { class: "inline", disabled: busy, title: `Write the Reverb lines in ${host}'s .env (a copy goes to .env.laman-backup first): ${(w.envMismatch || []).join(", ")}`,
+        onclick: () => setupReverbEnv(host) }, "Set up .env")));
+  }
+  return el("div", { class: "wk" },
+    el("div", { class: "wk-name" }, WK_NAMES[kind], el("span", { class: "muted" }, queue ? "Runs queued jobs" : "WebSockets server")),
+    el("label", { class: "switch", title: tip }, input),
+    el("div", { class: "wk-info" }, workerState(host, kind, w, hint), w.on ? what : null),
+    !w.on && !open ? el("span") : el("div", { class: "wk-acts" },
+      el("button", { disabled: busy || !w.on, title: `Restart ${host}'s ${WK_NAMES[kind].toLowerCase()}`,
+        onclick: () => workerAction(host, kind, `/api/workers/${kind}/restart`, {}) }, busy ? "…" : "Restart"),
+      el("button", { class: "linkish", "aria-expanded": open ? "true" : "false", disabled: !w.on && !open,
+        onclick: async () => { open ? wkOpen.delete(key) : wkOpen.add(key); render(true); if (!open) { await loadWorkerLogs(host); render(); } } }, open ? "Hide log" : "Log")),
+    subs.length ? el("div", { class: "wk-sub" }, subs) : null,
+    open ? el("div", { class: "devout" }, el("pre", { "data-wkout": key, tabindex: "0", "aria-label": `${host} ${WK_NAMES[kind].toLowerCase()} log` })) : null);
+}
+
+function workersBlock(s) {
+  const w = detail.workers;
+  if (!w?.laravel) return null;
+  return el("section", { class: "sd-workers", "aria-labelledby": "wk-title" },
+    el("div", { class: "sect-head" }, el("h2", { id: "wk-title" }, "Workers"),
+      el("span", { class: "hint" }, "Background processes laman runs for this site while it runs")),
+    el("div", { class: "panel" }, workerRow(s, "queue", w.queue), workerRow(s, "reverb", w.reverb)));
 }
 
 
@@ -940,7 +1087,8 @@ function queueRow(q) {
     el("div", { class: "who" },
       el("span", { class: "qsite" }, q.site ? el("a", { href: siteURL(q.site), target: "_blank", rel: "noopener" }, bare(q.site)) : qsite(q),
         qPerSite.get(qsite(q)) > 1 ? el("span", { class: "qn" }, ` · ${q.name}`) : null),
-      el("span", { class: "qname" }, `${q.driver === "redis" ? "redis" : `database · ${q.conn}`} · queue ${q.name}`)),
+      el("span", { class: "qname" }, `${q.driver === "redis" ? "redis" : `database · ${q.conn}`} · queue ${q.name}`),
+      q.noWorker && q.site ? el("a", { class: "noworker", href: siteHash(q.site), title: `Switch on ${q.site}'s queue worker on its page` }, "No worker running →") : null),
     el("div", { class: "counts" }, stat(q.waiting, "waiting"), stat(q.delayed, "delayed"), stat(q.reserved, "running"), stat(q.failed, "failed", true)),
     el("div", { class: "acts" },
       el("button", { "aria-expanded": open ? "true" : "false", onclick: () => toggleQueue(q) }, open ? "Hide jobs" : "Show jobs"),
