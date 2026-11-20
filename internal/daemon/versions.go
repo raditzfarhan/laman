@@ -124,12 +124,7 @@ func (d *daemon) useVersion(kind, want string) (string, error) {
 	case "php":
 		return v, d.changeConfig(func(c *config.Config) error { c.PHP = v; return nil })
 	case "node":
-		cfg, err := config.Load()
-		if err != nil {
-			return "", err
-		}
-		cfg.Node = v
-		if err := cfg.Save(); err != nil {
+		if err := d.saveConfig(func(c *config.Config) error { c.Node = v; return nil }); err != nil {
 			return "", err
 		}
 		return v, desktop.Junction(config.NodeLink(), install.NodeDir(v))
@@ -139,14 +134,7 @@ func (d *daemon) useVersion(kind, want string) (string, error) {
 
 // changeConfig edits config.json and refreshes sites and PHP pools.
 func (d *daemon) changeConfig(change func(*config.Config) error) error {
-	cfg, err := config.Load()
-	if err == nil {
-		err = change(cfg)
-	}
-	if err == nil {
-		err = cfg.Save()
-	}
-	if err != nil {
+	if err := d.saveConfig(change); err != nil {
 		return err
 	}
 	return d.refresh()
@@ -155,15 +143,14 @@ func (d *daemon) changeConfig(change func(*config.Config) error) error {
 func (d *daemon) switchServer(kind, v string) (string, error) {
 	d.switchMu.Lock()
 	defer d.switchMu.Unlock()
-	cfg, err := config.Load()
+	if err := d.saveConfig(install.PinVersions); err != nil {
+		return "", err
+	}
+	cfg, err := config.Load() // read only: config.json is saved below, under cfgMu
 	if err != nil {
 		return "", err
 	}
-	if err := install.PinVersions(cfg); err != nil {
-		return "", err
-	}
 	line := config.LineOf(kind, v)
-	*pinnedLine(cfg, kind) = line
 	v = config.Active(kind, line) // newest patch of that line
 	// Prepare the new line's data before stopping the old server, so the
 	// switch itself only takes as long as a stop and a start.
@@ -176,7 +163,12 @@ func (d *daemon) switchServer(kind, v string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := cfg.Save(); err != nil {
+	enabled := false
+	if err := d.saveConfig(func(c *config.Config) error {
+		*pinnedLine(c, kind) = line
+		enabled = c.Enabled(kind)
+		return nil
+	}); err != nil {
 		return "", err
 	}
 	logf("switching %s to %s", kind, v)
@@ -195,7 +187,7 @@ func (d *daemon) switchServer(kind, v string) (string, error) {
 	d.skipped = dropNotes(d.skipped, kindNames[kind])
 	d.mu.Unlock()
 
-	if !cfg.Enabled(kind) {
+	if !enabled {
 		return v, nil // switched while turned off: it stays off
 	}
 	if port := serverPort(d.cfg, kind); portBusy(port) {
@@ -481,12 +473,12 @@ func (d *daemon) setEnabled(kind string, on bool) error {
 	if on && !installed(kind) {
 		return fmt.Errorf("%s is not installed; run `laman install %s`", serviceName(kind), kind)
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	cfg.SetEnabled(kind, on)
-	if err := cfg.Save(); err != nil {
+	pinned := ""
+	if err := d.saveConfig(func(c *config.Config) error {
+		c.SetEnabled(kind, on)
+		pinned = *pinnedLine(c, kind)
+		return nil
+	}); err != nil {
 		return err
 	}
 	d.mu.Lock()
@@ -507,7 +499,7 @@ func (d *daemon) setEnabled(kind string, on bool) error {
 			return d.startMailpit()
 		}
 		// Same path as a version switch: prepares data, checks the port.
-		_, err := d.switchServer(kind, config.Active(kind, *pinnedLine(cfg, kind)))
+		_, err := d.switchServer(kind, config.Active(kind, pinned))
 		return err
 	}
 	return nil

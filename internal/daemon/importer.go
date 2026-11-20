@@ -206,11 +206,7 @@ func (d *daemon) importRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /api/import/laragon/dismiss", func(w http.ResponseWriter, r *http.Request) {
-		cfg, err := config.Load()
-		if err == nil {
-			cfg.LaragonNotice = "dismissed"
-			err = cfg.Save()
-		}
+		err := d.saveConfig(func(c *config.Config) error { c.LaragonNotice = "dismissed"; return nil })
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "%v", err)
 			return

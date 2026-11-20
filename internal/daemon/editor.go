@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"fmt"
 	"net/http"
 	"slices"
 	"sync"
@@ -100,7 +99,7 @@ func (d *daemon) editorRoutes(mux *http.ServeMux) {
 			fail(w, http.StatusBadRequest, "unknown editor")
 			return
 		}
-		if err := saveEditor(req.ID); err != nil {
+		if err := d.saveEditor(req.ID); err != nil {
 			fail(w, http.StatusInternalServerError, "%v", err)
 			return
 		}
@@ -112,14 +111,6 @@ func (d *daemon) editorRoutes(mux *http.ServeMux) {
 	})
 }
 
-func saveEditor(id string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	cfg.Editor = id
-	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("save config: %w", err)
-	}
-	return nil
+func (d *daemon) saveEditor(id string) error {
+	return d.saveConfig(func(c *config.Config) error { c.Editor = id; return nil })
 }

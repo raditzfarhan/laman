@@ -21,17 +21,17 @@ func (d *daemon) folderRoutes(mux *http.ServeMux) {
 				fail(w, http.StatusBadRequest, "path required")
 				return
 			}
-			cfg, err := config.Load()
-			if err != nil {
-				fail(w, http.StatusInternalServerError, "%v", err)
+			var path string
+			var changeErr error
+			err := d.saveConfig(func(c *config.Config) error {
+				path, changeErr = change(c, req.Path)
+				return changeErr
+			})
+			if changeErr != nil {
+				fail(w, http.StatusBadRequest, "%v", changeErr)
 				return
 			}
-			path, err := change(cfg, req.Path)
 			if err != nil {
-				fail(w, http.StatusBadRequest, "%v", err)
-				return
-			}
-			if err := cfg.Save(); err != nil {
 				fail(w, http.StatusInternalServerError, "%v", err)
 				return
 			}
@@ -52,13 +52,7 @@ func (d *daemon) folderRoutes(mux *http.ServeMux) {
 			fail(w, http.StatusBadRequest, "theme must be light, dark or empty")
 			return
 		}
-		cfg, err := config.Load()
-		if err != nil {
-			fail(w, http.StatusInternalServerError, "%v", err)
-			return
-		}
-		cfg.Theme = req.Theme
-		if err := cfg.Save(); err != nil {
+		if err := d.saveConfig(func(c *config.Config) error { c.Theme = req.Theme; return nil }); err != nil {
 			fail(w, http.StatusInternalServerError, "%v", err)
 			return
 		}
@@ -76,16 +70,16 @@ func (d *daemon) folderRoutes(mux *http.ServeMux) {
 			fail(w, http.StatusBadRequest, "path required")
 			return
 		}
-		cfg, err := config.Load()
+		var changeErr error
+		err := d.saveConfig(func(c *config.Config) error {
+			_, _, changeErr = c.SetFolderPrefix(req.Path, req.Prefix)
+			return changeErr
+		})
+		if changeErr != nil {
+			fail(w, http.StatusBadRequest, "%v", changeErr)
+			return
+		}
 		if err != nil {
-			fail(w, http.StatusInternalServerError, "%v", err)
-			return
-		}
-		if _, _, err := cfg.SetFolderPrefix(req.Path, req.Prefix); err != nil {
-			fail(w, http.StatusBadRequest, "%v", err)
-			return
-		}
-		if err := cfg.Save(); err != nil {
 			fail(w, http.StatusInternalServerError, "%v", err)
 			return
 		}

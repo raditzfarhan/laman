@@ -933,3 +933,51 @@ func TestWorkerSwitchConcurrentOnOff(t *testing.T) {
 		t.Errorf("in memory %v, on disk %v", mem, cfg.QueueWorkers["acme"])
 	}
 }
+
+func TestConfigWritersKeepWorkerSwitches(t *testing.T) {
+	// Writers elsewhere (theme, folder prefix, editor) load, change and save
+	// config.json too; run alongside worker switches, none may drop them.
+	f, mux, _ := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=redis\nREDIS_HOST=127.0.0.1\n")
+	f.d.folderRoutes(mux)
+	f.d.editorRoutes(mux)
+	other := t.TempDir()
+	writeFile(t, other, "artisan", "<?php\n")
+	setSites(f.d, f.d.sites[0], sites.Site{Name: "beta", Host: "beta.test", Path: other})
+
+	var wg sync.WaitGroup
+	for i := range 30 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch i % 3 {
+			case 0:
+				call(mux, "POST", "/api/theme", `{"theme":"dark"}`)
+			case 1:
+				call(mux, "POST", "/api/editor", `{"id":""}`)
+			case 2:
+				call(mux, "POST", "/api/folders/prefix", `{"path":"C:\nowhere","prefix":""}`)
+			}
+		}()
+	}
+	for _, c := range []struct{ kind, host string }{{"queue", "acme.test"}, {"reverb", "acme.test"}, {"queue", "beta.test"}, {"reverb", "beta.test"}} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rec := call(mux, "POST", "/api/workers/"+c.kind+"/switch", `{"site":"`+c.host+`","on":true}`); rec.Code != http.StatusOK {
+				t.Errorf("%s %s on: %d %s", c.kind, c.host, rec.Code, rec.Body)
+			}
+		}()
+	}
+	wg.Wait()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.QueueWorkers["acme"] || !cfg.QueueWorkers["beta"] || !cfg.Reverb["acme"] || !cfg.Reverb["beta"] ||
+		cfg.ReverbPorts["acme"] == 0 || cfg.ReverbPorts["beta"] == 0 {
+		t.Errorf("on disk: queue %v, reverb %v, ports %v", cfg.QueueWorkers, cfg.Reverb, cfg.ReverbPorts)
+	}
+	if cfg.Theme != "dark" {
+		t.Errorf("theme %q", cfg.Theme)
+	}
+}
