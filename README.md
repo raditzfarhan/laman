@@ -50,6 +50,8 @@ laman hosts            # adds blog.test to the hosts file (one UAC prompt)
 laman trust            # trusts laman's local CA so https://blog.test has no warnings
 ```
 
+laman's PHP (and Composer) trust the same CA, so PHP code can call `https://<other>.test`. The CA can only sign the dev TLD and localhost.
+
 - **Dashboard:** http://127.0.0.1:7171, or the tray icon. The **Light / Dark / Auto** switch at the bottom of its sidebar sets the look; Auto follows Windows.
 - **Site details:** click a site's name on Home to see what it runs on, drawn as a graph:
   - **Services:** its PHP version (switchable there), database (MariaDB, PostgreSQL or SQLite), Redis and what it's used for, mail (Mailpit or another mailer), queue driver with waiting and failed jobs, and Node version with its package manager.
@@ -345,11 +347,24 @@ That's it: pages connect to `wss://<site>.test/app`, and events you broadcast re
 - **Horizon** needs `pcntl`/`posix`, which PHP on Windows doesn't have, so for a project with `laravel/horizon` laman runs `queue:listen` instead, on the queues named in `config/horizon.php` when it can read them. The row says so.
 - **Needs a server:** a worker whose queue is in laman's Redis, MariaDB or PostgreSQL waits while that server is off (**waiting · Redis is off**) and starts by itself when it comes up.
 - **Reverb** runs `php artisan reverb:start` on a port laman gives the site (8100–8199, kept from then on), and Caddy sends the Pusher paths (`/app`, `/app/*`, `/apps/*`) on the site's own address to it. Browsers connect to `wss://<site>.test/app` (or `ws://` without HTTPS), the same origin as the page, as in production. A route of your own under `/app` doesn't work while Reverb is on.
-- **Set up .env:** **Set up .env** on the Reverb row, or `laman reverb env`, writes `BROADCAST_CONNECTION=reverb` and the `REVERB_HOST/PORT/SCHEME`, `REVERB_SERVER_HOST/PORT` and `VITE_REVERB_HOST/PORT/SCHEME` lines laman needs. PHP is pointed straight at the Reverb process (`REVERB_HOST=127.0.0.1`, `REVERB_PORT=<Reverb's port>`, `REVERB_SCHEME=http`, the same as `REVERB_SERVER_*`), because PHP does not trust laman's local CA and would fail with a cURL error 60 over https; only the browser-side `VITE_REVERB_*` lines use the site's address (host, https port and scheme). It changes those lines in place and adds missing ones at the end; it leaves everything else, including `REVERB_APP_ID/KEY/SECRET`, untouched. The `.env` as it was is saved first to `~/.laman/data/env-backups/<site>.env` (overwritten each time; laman writes nothing else into the project). Run `laman php artisan install:broadcasting --reverb` first if the project has no Reverb keys yet. Afterwards, restart Vite (`npm run dev`) or rebuild so the browser gets the new values, and run `php artisan config:clear` if the config is cached. The Reverb row shows **.env ✓ set up for laman**, or **.env points elsewhere** when the values differ.
+- **Set up .env:** **Set up .env** on the Reverb row, or `laman reverb env`, writes `BROADCAST_CONNECTION=reverb` and the `REVERB_HOST/PORT/SCHEME`, `REVERB_SERVER_HOST/PORT` and `VITE_REVERB_HOST/PORT/SCHEME` lines laman needs. PHP is pointed straight at the Reverb process (`REVERB_HOST=127.0.0.1`, `REVERB_PORT=<Reverb's port>`, `REVERB_SCHEME=http`, the same as `REVERB_SERVER_*`), over loopback http because that is simpler and faster (laman's PHP does trust `.test` sites, so https would work too); only the browser-side `VITE_REVERB_*` lines use the site's address (host, https port and scheme). It changes those lines in place and adds missing ones at the end; it leaves everything else, including `REVERB_APP_ID/KEY/SECRET`, untouched. The `.env` as it was is saved first to `~/.laman/data/env-backups/<site>/` as a dated file (the newest 10 are kept, restorable from the site page's Environment section; laman writes nothing else into the project). Run `laman php artisan install:broadcasting --reverb` first if the project has no Reverb keys yet. Afterwards, restart Vite (`npm run dev`) or rebuild so the browser gets the new values, and run `php artisan config:clear` if the config is cached. The Reverb row shows **.env ✓ set up for laman**, or **.env points elsewhere** when the values differ.
 - **Staying up:** a worker that exits is started again after 2 s, then 4, 8, 16 and 30 s. After 5 quick crashes in 2 minutes laman stops trying and shows **crashed** with the last output. Switched-on workers start with laman and stop with it; stopping ends the whole process tree.
 - **Code changes:** Reverb (and anything else that keeps your code in memory) needs **Restart** after you change the code. Changing the site's PHP version or setting up `.env` restarts its running workers.
 - **Logs:** `~/.laman/logs/queue-<site>.log` and `reverb-<site>.log`.
 - **Not (yet):** Reverb through `laman share` links (the frontend has the `.test` address built in), the scheduler (`schedule:work`), and custom `--queue=` lists.
+
+## Environment (.env)
+
+A site's page in the dashboard has an **Environment** section for its `.env`, so you don't need an editor for everyday changes. It shows for your own projects that have a `.env` or `.env.example`, not for laman's apps (laman manages their keys).
+
+- **Table:** one row per setting. Click a value to edit it, **Add a key**, or delete a row; nothing is written until **Save .env**, and only the lines you changed are touched: comments, blank lines, order, quoting and line endings stay as they are. If a key appears twice, the last line wins (as in Laravel), so the earlier rows are dimmed.
+- **Secrets:** values of keys such as `*_KEY`, `*_SECRET`, `*_PASSWORD`, `*_TOKEN` and URLs with a password in them show as dots until you click the eye on that row. Empty values are never masked.
+- **Missing keys:** keys in `.env.example` that `.env` lacks are listed with an **Add** button. With no `.env` yet, **Create .env from .env.example** copies it, and a Laravel project then offers **Generate APP_KEY**.
+- **Raw:** **Show raw file (shows secrets)** opens the whole file for pasting or bulk edits.
+- **Conflicts:** if `.env` changed on disk after the page loaded (an editor, `artisan`), saving is refused with a note to reload, so nothing is overwritten.
+- **Backups:** every save, restore and Reverb setup first copies the old file to `~/.laman/data/env-backups/<site>/` as a dated file. The newest 10 are kept, and **Backups** in the section restores one (the current file is backed up first).
+- **After a save:** the page says what still has the old values, only when it applies: **Clear config cache** when Laravel's config is cached, **Restart workers** when a queue worker or Reverb is running, and a reminder to restart the dev server (Vite) if one is running.
+- **Large files:** a `.env` over 256 KB isn't parsed; edit it by hand.
 
 ## Sharing a site
 
@@ -473,7 +488,7 @@ The icon, tray mark and dashboard colours come from `../logo/kit` (see its `USAG
   HTTP and HTTPS (HTTP/2 and HTTP/3). The CA is *name constrained* to the dev TLD, `localhost`
   and loopback IPs, so even a leaked CA key cannot impersonate real websites. `laman trust` adds
   it to the current user's Windows root store (one confirmation dialog, no admin), which Chrome
-  and Edge use; fully restart the browser afterwards, since a running browser keeps its old trust decisions. Caddy's own automatic HTTPS is switched off. If you change `tld`, run
+  and Edge use; fully restart the browser afterwards, since a running browser keeps its old trust decisions. laman also adds the CA to PHP's `cacert.pem` (between `# BEGIN laman local CA` and `# END laman local CA` lines, kept current when the CA changes), so every installed PHP and Composer trusts `.test` sites; the name constraint means that can't vouch for real websites. Caddy's own automatic HTTPS is switched off. If you change `tld`, run
   `laman trust --reset`.
 - **Tray:** `lamanw.exe` is a copy of `laman.exe` with its PE subsystem flag set to GUI (made by
   `self-install`/`laman tray`), so the tray never opens a console window, even at sign-in.
