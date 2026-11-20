@@ -101,10 +101,13 @@ type daemon struct {
 	switchMu sync.Mutex // one version switch at a time
 	ctx      context.Context
 
-	refreshMu sync.Mutex    // serialises refresh (watcher vs. /reload)
-	dbCounts  dbCountsCache // last read of the database queue tables
-	applied   string        // Caddyfile currently loaded into Caddy
-	raw       []sites.Site
+	refreshMu sync.Mutex // serialises refresh (watcher vs. /reload)
+	// cfgMu serialises laman's load-change-save of config.json (saveConfig,
+	// reverbPort). Taken before mu, never while holding it.
+	cfgMu    sync.Mutex
+	dbCounts dbCountsCache // last read of the database queue tables
+	applied  string        // Caddyfile currently loaded into Caddy
+	raw      []sites.Site
 
 	mu         sync.Mutex
 	pools      map[string]*pool // by PHP version

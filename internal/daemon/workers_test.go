@@ -716,10 +716,14 @@ func TestReverbEnvRouteNeedsReverbOn(t *testing.T) {
 }
 
 func TestReverbEnvRouteWrites(t *testing.T) {
-	f, mux, _ := routeFixture(t, "APP_KEY=x\nREVERB_APP_KEY=abc\nREVERB_PORT=443\n")
+	f, mux, _ := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=sqs\nREVERB_APP_KEY=abc\nREVERB_PORT=443\n")
 	reverbOn(f)
 	f.d.cfg.HTTPSPort = 8443
 	f.d.certHosts = map[string]bool{"acme.test": true}
+	f.d.cfg.QueueWorkers["acme"] = true
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil || f.count() != 1 {
+		t.Fatalf("queue worker: %v, starts %d", err, f.count())
+	}
 
 	rec := call(mux, "POST", "/api/reverb/env", `{"site":"acme.test"}`)
 	if rec.Code != http.StatusOK {
@@ -733,6 +737,12 @@ func TestReverbEnvRouteWrites(t *testing.T) {
 	if len(reply.Changed) != 9 || reply.ConfigCached {
 		t.Errorf("reply = %+v", reply)
 	}
+	if b, _ := os.ReadFile(filepath.Join(f.dir, ".env.laman-backup")); !strings.Contains(string(b), "REVERB_PORT=443\n") {
+		t.Errorf("backup = %q, want the .env before the write", b)
+	}
+	if n := f.count(); n != 2 {
+		t.Errorf("starts after a change = %d, want 2 (the running queue worker restarted)", n)
+	}
 	b, _ := os.ReadFile(filepath.Join(f.dir, ".env"))
 	for _, want := range []string{"REVERB_PORT=8443\n", "REVERB_SCHEME=https\n", "REVERB_HOST=acme.test\n", "REVERB_SERVER_PORT=8101\n", "VITE_REVERB_PORT=8443\n", "REVERB_APP_KEY=abc\n"} {
 		if !strings.Contains(string(b), want) {
@@ -745,6 +755,9 @@ func TestReverbEnvRouteWrites(t *testing.T) {
 	rec = call(mux, "POST", "/api/reverb/env", `{"site":"acme.test"}`)
 	if body := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || body != `{"changed":[],"configCached":true}` {
 		t.Errorf("second run: %d %s", rec.Code, body)
+	}
+	if n := f.count(); n != 2 {
+		t.Errorf("starts after a no-change run = %d, want 2 (no restart)", n)
 	}
 }
 
@@ -782,5 +795,50 @@ func TestQueueRowsNoWorker(t *testing.T) {
 	f.d.markNoWorker(rows)
 	if rows[0].NoWorker {
 		t.Errorf("worker running, still flagged")
+	}
+}
+
+func TestWorkerSwitchOnConcurrentPorts(t *testing.T) {
+	f, mux, _ := routeFixture(t, "APP_KEY=x\n")
+	other := t.TempDir()
+	writeFile(t, other, "artisan", "<?php\n")
+	setSites(f.d, f.d.sites[0], sites.Site{Name: "beta", Host: "beta.test", Path: other})
+
+	var wg sync.WaitGroup
+	for _, host := range []string{"acme.test", "beta.test"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rec := call(mux, "POST", "/api/workers/reverb/switch", `{"site":"`+host+`","on":true}`); rec.Code != http.StatusOK {
+				t.Errorf("%s on: %d %s", host, rec.Code, rec.Body)
+			}
+		}()
+	}
+	wg.Wait()
+	cfg, _ := config.Load()
+	a, b := cfg.ReverbPorts["acme"], cfg.ReverbPorts["beta"]
+	if a == 0 || b == 0 || a == b || !cfg.Reverb["acme"] || !cfg.Reverb["beta"] {
+		t.Errorf("on disk: reverb %v, ports %v", cfg.Reverb, cfg.ReverbPorts)
+	}
+	f.d.mu.Lock()
+	ma, mb := f.d.cfg.ReverbPorts["acme"], f.d.cfg.ReverbPorts["beta"]
+	f.d.mu.Unlock()
+	if ma != a || mb != b {
+		t.Errorf("in memory: acme %d beta %d, on disk %d %d", ma, mb, a, b)
+	}
+}
+
+func TestWorkerSwitchOffAfterSlowStop(t *testing.T) {
+	f, mux, _ := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=sqs\n")
+	if rec := call(mux, "POST", "/api/workers/queue/switch", `{"site":"acme.test","on":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("on: %d %s", rec.Code, rec.Body)
+	}
+	workerStopWait = 0 // the stop gives up waiting before the exit
+	call(mux, "POST", "/api/workers/queue/switch", `{"site":"acme.test","on":false}`)
+	if !eventually(t, 5*time.Second, func() bool {
+		st := f.d.workerState(workerQueue, "acme.test")
+		return st.State == workerOff && st.PID == 0
+	}) {
+		t.Errorf("after a slow stop: %+v, want off", f.d.workerState(workerQueue, "acme.test"))
 	}
 }

@@ -85,6 +85,7 @@ type worker struct {
 	since   time.Time
 	stop    bool          // stop was asked for: an exit is not a crash
 	gone    bool          // its site disappeared; it is off until the site returns
+	offed   bool          // the stop is a switch-off: it ends off, not stopped
 	failed  bool          // laman gave up on this run (Reverb never opened its port): its exit is not a crash
 	gen     int           // bumped by each startWorker; older timers and exits are ignored
 	timer   *time.Timer   // a pending restart
@@ -213,7 +214,7 @@ func (d *daemon) startWorker(kind, host string) error {
 		w.timer.Stop()
 		w.timer = nil
 	}
-	w.stop, w.gone, w.crashes, w.errMsg, w.waiting, w.note = false, false, nil, "", "", ""
+	w.stop, w.gone, w.offed, w.crashes, w.errMsg, w.waiting, w.note = false, false, false, nil, "", "", ""
 	w.state = workerStarting
 	w.mu.Unlock()
 	return d.launchWorker(w, gen, true)
@@ -384,7 +385,7 @@ func (d *daemon) workerExited(w *worker, gen int, err error) {
 	}
 	w.pid = 0
 	if w.stop {
-		w.state = workerStopped
+		w.state = w.stoppedState()
 		return
 	}
 	if w.failed {
@@ -505,16 +506,19 @@ func serviceOffMsg(kind string) string {
 // first use.
 func (d *daemon) reverbPort(name string) (int, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if p, ok := d.cfg.ReverbPorts[name]; ok && p != 0 {
+	p, ok := d.cfg.ReverbPorts[name]
+	d.mu.Unlock()
+	if ok && p != 0 {
 		return p, nil
 	}
+	d.cfgMu.Lock() // before mu, as everywhere
+	defer d.cfgMu.Unlock()
 	cfg, err := config.Load()
 	if err != nil {
 		return 0, err
 	}
 	_, had := cfg.ReverbPorts[name]
-	p := cfg.ReverbPort(name)
+	p = cfg.ReverbPort(name)
 	if p == 0 {
 		return 0, fmt.Errorf("no free Reverb port between %d and %d", config.ReverbFirstPort, config.ReverbLastPort)
 	}
@@ -523,6 +527,8 @@ func (d *daemon) reverbPort(name string) (int, error) {
 			return 0, err
 		}
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.cfg.ReverbPorts == nil {
 		d.cfg.ReverbPorts = map[string]int{}
 	}
@@ -603,9 +609,18 @@ func (w *worker) halt() (int, chan struct{}) {
 		w.timer = nil
 	}
 	if w.pid == 0 && w.state != workerOff {
-		w.state = workerStopped
+		w.state = w.stoppedState()
 	}
 	return w.pid, w.done
+}
+
+// stoppedState: what a stopped worker shows, off after a switch-off.
+// Callers hold w.mu.
+func (w *worker) stoppedState() string {
+	if w.offed {
+		return workerOff
+	}
+	return workerStopped
 }
 
 // restartWorker stops and starts a worker, e.g. after code changes.
@@ -926,18 +941,17 @@ func (d *daemon) setupReverbEnv(s sites.Site) (reverbEnvReply, error) {
 // switchWorkerOff stops a worker that was switched off; it then shows as
 // off, not as stopped by hand.
 func (d *daemon) switchWorkerOff(kind, host string) {
-	if !d.stopWorkerWait(kind, host) {
-		logf("%s worker for %s: still stopping after %s", kind, host, workerStopWait)
-	}
 	w := d.worker(kind, host)
 	if w == nil {
 		return
 	}
+	// Marked first, so an exit after a slow stop also ends off.
 	w.mu.Lock()
-	if w.pid == 0 && w.stop {
-		w.state, w.errMsg, w.waiting = workerOff, "", ""
-	}
+	w.offed, w.waiting = true, ""
 	w.mu.Unlock()
+	if !d.stopWorkerWait(kind, host) {
+		logf("%s worker for %s: still stopping after %s", kind, host, workerStopWait)
+	}
 }
 
 // workerRoutes: the dashboard's and the CLI's worker API. Bodies name the
@@ -1005,7 +1019,7 @@ func (d *daemon) workerRoutes(mux *http.ServeMux) {
 			}
 		}
 		port := 0
-		err := saveConfig(func(c *config.Config) error {
+		err := d.saveConfig(func(c *config.Config) error {
 			m := &c.QueueWorkers
 			if kind == workerReverb {
 				m = &c.Reverb
