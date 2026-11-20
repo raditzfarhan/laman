@@ -104,7 +104,7 @@ func TestEnvSaveChangesAndRaw(t *testing.T) {
 	if rec.Code != 400 {
 		t.Errorf("both: %d", rec.Code)
 	}
-	rec = call(mux, "POST", "/api/env/save", `{"site":"acme.test"}`)
+	rec = call(mux, "POST", "/api/env/save", `{"site":"acme.test","fingerprint":"`+r.Fingerprint+`"}`)
 	if rec.Code != 400 {
 		t.Errorf("neither: %d", rec.Code)
 	}
@@ -112,7 +112,7 @@ func TestEnvSaveChangesAndRaw(t *testing.T) {
 
 func TestEnvRestore(t *testing.T) {
 	_, mux, dir := envSite(t, "A=1\n")
-	rec := call(mux, "POST", "/api/env/save", `{"site":"acme.test","raw":"A=2\n"}`)
+	rec := call(mux, "POST", "/api/env/save", `{"site":"acme.test","fingerprint":"`+envFingerprint([]byte("A=1\n"))+`","raw":"A=2\n"}`)
 	var r envSaveReply
 	json.Unmarshal(rec.Body.Bytes(), &r)
 	if r.Backup == "" {
@@ -127,7 +127,7 @@ func TestEnvRestore(t *testing.T) {
 	if r2.Backup == "" || r2.Backup == r.Backup {
 		t.Errorf("no new backup: %+v", r2)
 	}
-	if rec := call(mux, "POST", "/api/env/restore", `{"site":"acme.test","backup":"../x"}`); rec.Code != 400 {
+	if rec := call(mux, "POST", "/api/env/restore", `{"site":"acme.test","fingerprint":"`+r2.Fingerprint+`","backup":"../x"}`); rec.Code != 400 {
 		t.Errorf("bad id: %d", rec.Code)
 	}
 	rec = call(mux, "GET", "/api/env/backups?site=acme.test", "")
@@ -146,20 +146,24 @@ func TestEnvCreateAndAppKey(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"needsKey":true`) {
 		t.Fatal(rec.Code, rec.Body)
 	}
+	var cr struct{ Fingerprint string }
+	json.Unmarshal(rec.Body.Bytes(), &cr)
 	if envText(t, dir) != "APP_KEY=\r\nA=1\r\n" {
 		t.Error("copy not exact")
 	}
 	if rec := call(mux, "POST", "/api/env/create", `{"site":"acme.test"}`); rec.Code != 409 {
 		t.Errorf("create twice: %d", rec.Code)
 	}
-	rec = call(mux, "POST", "/api/env/appkey", `{"site":"acme.test"}`)
+	rec = call(mux, "POST", "/api/env/appkey", `{"site":"acme.test","fingerprint":"`+cr.Fingerprint+`"}`)
 	if rec.Code != 200 {
 		t.Fatal(rec.Code, rec.Body)
 	}
-	if !regexp.MustCompile(`(?m)^APP_KEY="?base64:[A-Za-z0-9+/]{43}="?\r?$`).MatchString(envText(t, dir)) {
+	if !regexp.MustCompile(`(?m)^APP_KEY=base64:[A-Za-z0-9+/]{43}="?\r?$`).MatchString(envText(t, dir)) {
 		t.Errorf("%q", envText(t, dir))
 	}
-	if rec := call(mux, "POST", "/api/env/appkey", `{"site":"acme.test"}`); rec.Code != 400 {
+	var ak envSaveReply
+	json.Unmarshal(rec.Body.Bytes(), &ak)
+	if rec := call(mux, "POST", "/api/env/appkey", `{"site":"acme.test","fingerprint":"`+ak.Fingerprint+`"}`); rec.Code != 400 {
 		t.Errorf("second: %d", rec.Code)
 	}
 }
@@ -179,5 +183,21 @@ func TestEnvTooBig(t *testing.T) {
 	}
 	if rec := call(mux, "GET", "/api/env/value?site=acme.test&key=A", ""); rec.Code != 400 && rec.Code != 404 {
 		t.Errorf("value: %d", rec.Code)
+	}
+}
+
+func TestEnvFingerprintRequired(t *testing.T) {
+	_, mux, dir := envSite(t, "A=1\n")
+	for path, body := range map[string]string{
+		"/api/env/save":    `{"site":"acme.test","raw":"A=2\n"}`,
+		"/api/env/restore": `{"site":"acme.test","backup":"20240101-000000"}`,
+		"/api/env/appkey":  `{"site":"acme.test"}`,
+	} {
+		if rec := call(mux, "POST", path, body); rec.Code != 400 || !strings.Contains(rec.Body.String(), "fingerprint required") {
+			t.Errorf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if envText(t, dir) != "A=1\n" {
+		t.Error("file changed")
 	}
 }

@@ -214,6 +214,10 @@ func (d *daemon) envRoutes(mux *http.ServeMux) {
 		if !ok {
 			return
 		}
+		if req.Fingerprint == "" {
+			fail(w, http.StatusBadRequest, "fingerprint required")
+			return
+		}
 		if (req.Raw == nil) == (req.Changes == nil) {
 			fail(w, http.StatusBadRequest, "send either changes or raw")
 			return
@@ -249,6 +253,10 @@ func (d *daemon) envRoutes(mux *http.ServeMux) {
 		}
 		s, ok := d.envSite(w, req.Site)
 		if !ok {
+			return
+		}
+		if req.Fingerprint == "" {
+			fail(w, http.StatusBadRequest, "fingerprint required")
 			return
 		}
 		data, err := readEnvBackup(s.Name, req.Backup)
@@ -330,7 +338,14 @@ func (d *daemon) envRoutes(mux *http.ServeMux) {
 			return
 		}
 		s, ok := d.envSite(w, req.Site)
-		if !ok || !envReadable(w, s) {
+		if !ok {
+			return
+		}
+		if req.Fingerprint == "" {
+			fail(w, http.StatusBadRequest, "fingerprint required")
+			return
+		}
+		if !envReadable(w, s) {
 			return
 		}
 		key := make([]byte, 32)

@@ -79,6 +79,12 @@ func TestDecodeEncodeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEncodeEqualsStaysBare(t *testing.T) {
+	if got := encodeEnvValue("base64:abc=", 0); got != "base64:abc=" {
+		t.Errorf("got %s", got)
+	}
+}
+
 const bsl = string(bs)
 
 func TestDecodeEscapes(t *testing.T) {

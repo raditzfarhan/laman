@@ -65,7 +65,7 @@ func TestApplySetKeepsQuoteStyle(t *testing.T) {
 func TestApplySetQuotesWhenNeeded(t *testing.T) {
 	checkApply(t, "A=1\n", envChange{"set", "A", "two words"}, "A=\"two words\"\n")
 	checkApply(t, "A=1\n", envChange{"set", "A", `say "hi"`}, "A=\"say \\\"hi\\\"\"\n")
-	checkApply(t, "A=1\n", envChange{"set", "A", "a=b"}, "A=\"a=b\"\n")
+	checkApply(t, "A=1\n", envChange{"set", "A", "a=b"}, "A=a=b\n")
 	checkApply(t, "A=1\n", envChange{"set", "A", "$HOME"}, "A=\"$HOME\"\n")
 	checkApply(t, "A=1\n", envChange{"set", "A", "plain-1/x"}, "A=plain-1/x\n")
 }
