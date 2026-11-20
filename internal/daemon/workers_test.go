@@ -892,3 +892,44 @@ func TestWorkerSwitchOffAfterSlowStop(t *testing.T) {
 		t.Errorf("after a slow stop: %+v, want off", f.d.workerState(workerQueue, "acme.test"))
 	}
 }
+
+func TestSyncWorkersStopsSwitchedOff(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	first := f.d.workerState(workerQueue, "acme.test")
+	f.setSwitch(workerQueue, false) // switched off in config.json by hand
+	f.d.syncWorkers()
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerOff || st.PID != 0 {
+		t.Errorf("after sync: %+v, want off", st)
+	}
+	if processAlive(first.PID) {
+		t.Errorf("pid %d still runs after its switch went off", first.PID)
+	}
+	f.d.syncWorkers()
+	if n := f.count(); n != 1 {
+		t.Errorf("starts = %d, want 1", n)
+	}
+}
+
+func TestWorkerSwitchConcurrentOnOff(t *testing.T) {
+	// Waiting for Redis: on and off are cheap, no process starts.
+	f, mux, _ := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=redis\nREDIS_HOST=127.0.0.1\n")
+	var wg sync.WaitGroup
+	for i := range 40 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			call(mux, "POST", "/api/workers/queue/switch", fmt.Sprintf(`{"site":"acme.test","on":%v}`, i%2 == 0))
+		}()
+	}
+	wg.Wait()
+	cfg, _ := config.Load()
+	f.d.mu.Lock()
+	mem := f.d.cfg.QueueWorkers["acme"]
+	f.d.mu.Unlock()
+	if mem != cfg.QueueWorkers["acme"] {
+		t.Errorf("in memory %v, on disk %v", mem, cfg.QueueWorkers["acme"])
+	}
+}

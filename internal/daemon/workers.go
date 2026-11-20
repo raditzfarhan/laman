@@ -697,7 +697,8 @@ func (d *daemon) startAutoWorkers() {
 }
 
 // syncWorkers brings the workers in line with the sites after a rescan:
-// workers of a site that is gone are stopped (state off); switched-on ones
+// workers of a site that is gone, and active ones switched off in the
+// config, are stopped (state off); switched-on ones
 // of a site that (re)appeared are started; active ones whose site now
 // resolves to another PHP version are restarted. It does nothing when
 // nothing changed. The processes are stopped and started outside d.mu.
@@ -706,7 +707,7 @@ func (d *daemon) syncWorkers() {
 		kind, host string
 		w          *worker
 	}
-	var gone, start, restart []job
+	var gone, start, restart, off []job
 	d.mu.Lock()
 	byHost := make(map[string]sites.Site, len(d.sites))
 	for _, s := range d.sites {
@@ -722,6 +723,8 @@ func (d *daemon) syncWorkers() {
 			if d.switchedOn(w.kind, s.Name) {
 				start = append(start, job{w.kind, s.Host, w})
 			}
+		case ok && w.active() && !d.switchedOn(w.kind, s.Name):
+			off = append(off, job{w.kind, s.Host, w}) // switched off in config.json
 		case ok && w.active() && w.site.PHP != s.PHP:
 			restart = append(restart, job{w.kind, s.Host, w})
 		}
@@ -753,6 +756,10 @@ func (d *daemon) syncWorkers() {
 			j.w.state = workerOff
 		}
 		j.w.mu.Unlock()
+	}
+	for _, j := range off {
+		logf("%s worker for %s: switched off, stopping", j.kind, j.host)
+		d.switchWorkerOff(j.kind, j.host)
 	}
 	for _, j := range restart {
 		logf("%s worker for %s: PHP changed, restarting", j.kind, j.host)
