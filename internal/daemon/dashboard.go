@@ -247,14 +247,7 @@ func (d *daemon) apiSitePHP(w http.ResponseWriter, r *http.Request) {
 // updateConfig applies a change to config.json and refreshes, so the
 // dashboard and the CLI share one source of truth.
 func (d *daemon) updateConfig(w http.ResponseWriter, change func(*config.Config) error) {
-	cfg, err := config.Load()
-	if err == nil {
-		err = change(cfg)
-	}
-	if err == nil {
-		err = cfg.Save()
-	}
-	if err != nil {
+	if err := saveConfig(change); err != nil {
 		fail(w, http.StatusBadRequest, "%v", err)
 		return
 	}
@@ -263,6 +256,18 @@ func (d *daemon) updateConfig(w http.ResponseWriter, change func(*config.Config)
 		return
 	}
 	writeJSON(w, d.status())
+}
+
+// saveConfig loads laman's config from disk, applies change and saves it.
+func saveConfig(change func(*config.Config) error) error {
+	cfg, err := config.Load()
+	if err == nil {
+		err = change(cfg)
+	}
+	if err == nil {
+		err = cfg.Save()
+	}
+	return err
 }
 
 func (d *daemon) apiPHPInstall(w http.ResponseWriter, r *http.Request) {

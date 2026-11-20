@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
+	"laman/internal/caddyconf"
 	"laman/internal/config"
 	"laman/internal/install"
 	"laman/internal/sites"
@@ -23,6 +25,35 @@ type siteDetail struct {
 	Size     sizeState              `json:"size"`
 	Ports    webPorts               `json:"ports"`
 	Services map[string]serviceFact `json:"services"` // mariadb, postgres, redis, mailpit
+	Workers  *workersFact           `json:"workers"`
+}
+
+// workersFact: the site's queue worker and Reverb server. Only laravel is
+// filled for a project without artisan.
+type workersFact struct {
+	Laravel bool             `json:"laravel"`
+	Queue   queueWorkerFact  `json:"queue"`
+	Reverb  reverbWorkerFact `json:"reverb"`
+}
+
+type queueWorkerFact struct {
+	On      bool         `json:"on"` // switched on
+	Status  WorkerStatus `json:"status"`
+	Suggest bool         `json:"suggest"` // the .env queues jobs, and the worker is off
+	Inline  bool         `json:"inline"`  // QUEUE_CONNECTION=sync/null: nothing to run
+	Note    string       `json:"note,omitempty"`
+}
+
+type reverbWorkerFact struct {
+	On           bool         `json:"on"`
+	Status       WorkerStatus `json:"status"`
+	Installed    bool         `json:"installed"` // laravel/reverb in composer.json or vendor
+	Suggest      bool         `json:"suggest"`   // installed, and off
+	Port         int          `json:"port,omitempty"`
+	URL          string       `json:"url,omitempty"` // what browsers connect to, e.g. wss://acme.test/app
+	EnvOK        bool         `json:"envOK"`         // on, and .env holds laman's values
+	EnvMismatch  []string     `json:"envMismatch"`   // on: the keys that differ
+	NeedsInstall bool         `json:"needsInstall"`  // no REVERB_APP_KEY: run php artisan reverb:install
 }
 
 type nodeFact struct {
@@ -106,7 +137,39 @@ func (d *daemon) siteDetail(s sites.Site) siteDetail {
 		"mailpit":  {Port: cfg.SMTPPort, UIPort: cfg.MailUIPort, Running: running("mailpit"), Off: !cfg.Enabled("mailpit")},
 	}
 	d.mu.Unlock()
+	r.Workers = d.workersFact(s, cfg)
 	return r
+}
+
+// workersFact reads the site's files only: no PHP runs here.
+func (d *daemon) workersFact(s sites.Site, cfg *config.Config) *workersFact {
+	f := &workersFact{Laravel: exists(filepath.Join(s.Path, "artisan")), Reverb: reverbWorkerFact{EnvMismatch: []string{}}}
+	if !f.Laravel {
+		return f
+	}
+	vals, hasEnv := readEnvFile(s.Path)
+	_, appKey := vals["APP_KEY"]
+	plan := planQueue(s.Path, vals, nil)
+	q := &f.Queue
+	q.On, q.Status, q.Inline, q.Note = cfg.QueueWorkers[s.Name], d.workerState(workerQueue, s.Host), plan.Inline, plan.Note
+	q.Suggest = hasEnv && appKey && !plan.Inline && !q.On
+
+	rv := &f.Reverb
+	rv.On, rv.Status = cfg.Reverb[s.Name], d.workerState(workerReverb, s.Host)
+	rv.Installed = composerRequires(s.Path, "laravel/reverb")
+	rv.Suggest = rv.Installed && !rv.On
+	rv.Port = cfg.ReverbPorts[s.Name]
+	rv.NeedsInstall = vals["REVERB_APP_KEY"] == ""
+	if rv.On && rv.Port > 0 {
+		scheme, port := d.siteEndpoint(s.Host)
+		rv.URL = "ws" + strings.TrimPrefix(caddyconf.URL(s.Host, scheme == "https", port), "http") + "app"
+		rv.EnvMismatch = envMismatch(vals, reverbEnv(s.Host, scheme, port, rv.Port))
+		if rv.EnvMismatch == nil {
+			rv.EnvMismatch = []string{}
+		}
+		rv.EnvOK = len(rv.EnvMismatch) == 0
+	}
+	return f
 }
 
 // forgetGoneSizes drops size measurements of folders no site uses any more.

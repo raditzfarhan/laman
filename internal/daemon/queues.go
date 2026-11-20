@@ -22,6 +22,8 @@ type queueRow struct {
 	Driver string `json:"driver"`           // redis or database
 	Conn   string `json:"conn,omitempty"`   // database: mysql, pgsql, sqlite...
 	Failed int64  `json:"failed,omitempty"` // in the site's failed_jobs table
+	// NoWorker: jobs wait, and laman runs no queue worker for the site.
+	NoWorker bool `json:"noWorker,omitempty"`
 }
 
 type otherDriver struct {
@@ -230,6 +232,8 @@ func (d *daemon) queues() queuesReply {
 		}
 	}
 
+	d.markNoWorker(reply.Queues)
+
 	// Failures first, then the busiest.
 	sort.SliceStable(reply.Queues, func(i, j int) bool {
 		a, b := reply.Queues[i], reply.Queues[j]
@@ -244,6 +248,18 @@ func (d *daemon) queues() queuesReply {
 	sort.Strings(reply.Idle)
 	sort.Slice(reply.Unchecked, func(i, j int) bool { return reply.Unchecked[i].Site < reply.Unchecked[j].Site })
 	return reply
+}
+
+// markNoWorker flags the rows whose jobs wait for a worker while laman runs
+// none for their site. Jobs being worked on (reserved) alone don't count.
+func (d *daemon) markNoWorker(rows []queueRow) {
+	for i := range rows {
+		r := &rows[i]
+		if r.Site == "" || r.Waiting+r.Delayed == 0 {
+			continue
+		}
+		r.NoWorker = d.workerState(workerQueue, r.Site).State != workerRunning
+	}
 }
 
 func (d *daemon) siteByHost(host string) (sites.Site, bool) {

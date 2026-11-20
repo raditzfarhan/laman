@@ -113,6 +113,7 @@ type daemon struct {
 	notes      []string // problems worth showing in `laman status`
 	hostsStale bool
 	tls        tlsState
+	certHosts  map[string]bool // sites served over HTTPS with their own certificate
 	webErr     string
 
 	quit       chan struct{}
@@ -626,6 +627,10 @@ func (d *daemon) refresh() error {
 	d.mu.Lock()
 	d.laragonFound = lerr == nil
 	d.sites, d.hostsStale, d.tls, d.webErr = list, stale, tlsState, ""
+	d.certHosts = make(map[string]bool, len(in.Certs))
+	for host := range in.Certs {
+		d.certHosts[host] = true
+	}
 	d.defaultPHP, d.notes = defaultPHP, notes
 	d.mu.Unlock()
 	d.syncWorkers() // sites gone or back, PHP versions changed
@@ -781,6 +786,7 @@ func (d *daemon) routes() http.Handler {
 	})
 	d.dashboardRoutes(mux)
 	d.devRoutes(mux)
+	d.workerRoutes(mux)
 	d.updateRoutes(mux)
 	return guard(mux, d.cfg.ControlPort)
 }

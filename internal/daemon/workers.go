@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -855,4 +856,270 @@ func (d *daemon) reverbPortsFor(list []sites.Site) map[string]int {
 		}
 	}
 	return out
+}
+
+// workersCaddyChanged regenerates Caddy's config after a Reverb switch, so
+// the site's /app routes follow; tests replace it.
+var workersCaddyChanged = (*daemon).devChanged
+
+// siteEndpoint is how browsers reach a site, as its URL is built
+// (caddyconf.URL): https on laman's HTTPS port when the site has a
+// certificate, else http on the HTTP port.
+func (d *daemon) siteEndpoint(host string) (scheme string, port int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cfg.HTTPSPort > 0 && d.certHosts[host] {
+		return "https", d.cfg.HTTPSPort
+	}
+	return "http", d.cfg.HTTPPort
+}
+
+// reverbWant is what the site's .env should hold for its Reverb server on
+// reverbPort behind laman's proxy.
+func (d *daemon) reverbWant(s sites.Site, reverbPort int) []envKV {
+	scheme, port := d.siteEndpoint(s.Host)
+	return reverbEnv(s.Host, scheme, port, reverbPort)
+}
+
+// reverbEnvReply: the .env keys laman wrote, and whether Laravel's config is
+// cached (the new values then need `php artisan config:clear`).
+type reverbEnvReply struct {
+	Changed      []string `json:"changed"`
+	ConfigCached bool     `json:"configCached"`
+}
+
+// setupReverbEnv writes laman's Reverb values into the site's .env and
+// restarts the site's running workers when anything changed.
+func (d *daemon) setupReverbEnv(s sites.Site) (reverbEnvReply, error) {
+	d.mu.Lock()
+	on := d.cfg.Reverb[s.Name]
+	d.mu.Unlock()
+	if !on {
+		return reverbEnvReply{}, fmt.Errorf("Reverb is off for %s; switch it on first", s.Host)
+	}
+	vals, ok := readEnvFile(s.Path)
+	if !ok {
+		return reverbEnvReply{}, fmt.Errorf("%s has no .env", s.Host)
+	}
+	if vals["REVERB_APP_KEY"] == "" {
+		return reverbEnvReply{}, errors.New("run php artisan reverb:install first")
+	}
+	rp, err := d.reverbPort(s.Name)
+	if err != nil {
+		return reverbEnvReply{}, err
+	}
+	want := d.reverbWant(s, rp)
+	changed := envMismatch(vals, want)
+	if len(changed) > 0 {
+		if err := writeEnvKeys(filepath.Join(s.Path, ".env"), want); err != nil {
+			return reverbEnvReply{}, err
+		}
+		if err := d.restartSiteWorkers(s.Name); err != nil {
+			logf("restarting workers of %s after its .env changed: %v", s.Host, err)
+		}
+	} else {
+		changed = []string{}
+	}
+	return reverbEnvReply{Changed: changed, ConfigCached: exists(filepath.Join(s.Path, "bootstrap", "cache", "config.php"))}, nil
+}
+
+// switchWorkerOff stops a worker that was switched off; it then shows as
+// off, not as stopped by hand.
+func (d *daemon) switchWorkerOff(kind, host string) {
+	if !d.stopWorkerWait(kind, host) {
+		logf("%s worker for %s: still stopping after %s", kind, host, workerStopWait)
+	}
+	w := d.worker(kind, host)
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.pid == 0 && w.stop {
+		w.state, w.errMsg, w.waiting = workerOff, "", ""
+	}
+	w.mu.Unlock()
+}
+
+// workerRoutes: the dashboard's and the CLI's worker API. Bodies name the
+// site by host or name, like the dev server routes.
+func (d *daemon) workerRoutes(mux *http.ServeMux) {
+	kindOf := func(w http.ResponseWriter, r *http.Request) (string, bool) {
+		k := r.PathValue("kind")
+		if k != workerQueue && k != workerReverb {
+			fail(w, http.StatusBadRequest, "unknown worker %q (queue or reverb)", k)
+			return "", false
+		}
+		return k, true
+	}
+	// The switched-on workers of current sites.
+	mux.HandleFunc("GET /api/workers", func(w http.ResponseWriter, r *http.Request) {
+		type job struct{ kind, host string }
+		var on []job
+		d.mu.Lock()
+		for _, s := range d.sites {
+			if s.App != "" {
+				continue
+			}
+			for _, kind := range []string{workerQueue, workerReverb} {
+				if d.switchedOn(kind, s.Name) {
+					on = append(on, job{kind, s.Host})
+				}
+			}
+		}
+		d.mu.Unlock()
+		list := []WorkerStatus{}
+		for _, j := range on {
+			list = append(list, d.workerState(j.kind, j.host))
+		}
+		writeJSON(w, list)
+	})
+	mux.HandleFunc("POST /api/workers/{kind}/switch", func(w http.ResponseWriter, r *http.Request) {
+		kind, ok := kindOf(w, r)
+		if !ok {
+			return
+		}
+		var req struct {
+			Site string
+			On   bool
+		}
+		if err := readJSON(r, &req); err != nil || req.Site == "" {
+			fail(w, http.StatusBadRequest, "site required")
+			return
+		}
+		s, ok := d.findSite(req.Site)
+		if !ok || s.App != "" {
+			fail(w, http.StatusNotFound, "no site %s", req.Site)
+			return
+		}
+		if req.On {
+			if !exists(filepath.Join(s.Path, "artisan")) {
+				fail(w, http.StatusBadRequest, "%s is not a Laravel app", s.Host)
+				return
+			}
+			if kind == workerQueue {
+				vals, _ := readEnvFile(s.Path)
+				if plan := planQueue(s.Path, vals, nil); plan.Inline {
+					fail(w, http.StatusBadRequest, "%s", plan.Note)
+					return
+				}
+			}
+		}
+		port := 0
+		err := saveConfig(func(c *config.Config) error {
+			m := &c.QueueWorkers
+			if kind == workerReverb {
+				m = &c.Reverb
+			}
+			if !req.On {
+				delete(*m, s.Name)
+				return nil
+			}
+			if *m == nil {
+				*m = map[string]bool{}
+			}
+			(*m)[s.Name] = true
+			if kind == workerReverb {
+				if port = c.ReverbPort(s.Name); port == 0 {
+					return fmt.Errorf("no free Reverb port between %d and %d", config.ReverbFirstPort, config.ReverbLastPort)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			fail(w, http.StatusBadRequest, "%v", err)
+			return
+		}
+		// The daemon's copy follows at once; the next refresh reloads it.
+		d.mu.Lock()
+		m := &d.cfg.QueueWorkers
+		if kind == workerReverb {
+			m = &d.cfg.Reverb
+		}
+		if req.On {
+			if *m == nil {
+				*m = map[string]bool{}
+			}
+			(*m)[s.Name] = true
+		} else {
+			delete(*m, s.Name)
+		}
+		if port > 0 {
+			if d.cfg.ReverbPorts == nil {
+				d.cfg.ReverbPorts = map[string]int{}
+			}
+			d.cfg.ReverbPorts[s.Name] = port
+		}
+		d.mu.Unlock()
+
+		if req.On {
+			// A failed start shows in the state (crashed, with the error).
+			if err := d.startWorker(kind, s.Host); err != nil {
+				logf("start %s worker for %s: %v", kind, s.Host, err)
+			}
+		} else {
+			d.switchWorkerOff(kind, s.Host)
+		}
+		if kind == workerReverb {
+			workersCaddyChanged(d)
+		}
+		writeJSON(w, d.workerState(kind, s.Host))
+	})
+	mux.HandleFunc("POST /api/workers/{kind}/restart", func(w http.ResponseWriter, r *http.Request) {
+		kind, ok := kindOf(w, r)
+		if !ok {
+			return
+		}
+		var req struct{ Site string }
+		if err := readJSON(r, &req); err != nil || req.Site == "" {
+			fail(w, http.StatusBadRequest, "site required")
+			return
+		}
+		s, ok := d.findSite(req.Site)
+		if !ok || s.App != "" {
+			fail(w, http.StatusNotFound, "no site %s", req.Site)
+			return
+		}
+		d.mu.Lock()
+		on := d.switchedOn(kind, s.Name)
+		d.mu.Unlock()
+		if !on {
+			fail(w, http.StatusBadRequest, "the %s worker is off for %s", kind, s.Host)
+			return
+		}
+		if !d.stopWorkerWait(kind, s.Host) {
+			fail(w, http.StatusConflict, "%s for %s is still stopping", kind, s.Host)
+			return
+		}
+		if err := d.startWorker(kind, s.Host); err != nil {
+			logf("restart %s worker for %s: %v", kind, s.Host, err)
+		}
+		writeJSON(w, d.workerState(kind, s.Host))
+	})
+	// The worker's recent output, newest last.
+	mux.HandleFunc("GET /api/workers/{kind}/log", func(w http.ResponseWriter, r *http.Request) {
+		kind, ok := kindOf(w, r)
+		if !ok {
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		io.WriteString(w, d.workerLog(kind, r.URL.Query().Get("site")))
+	})
+	mux.HandleFunc("POST /api/reverb/env", func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Site string }
+		if err := readJSON(r, &req); err != nil || req.Site == "" {
+			fail(w, http.StatusBadRequest, "site required")
+			return
+		}
+		s, ok := d.findSite(req.Site)
+		if !ok || s.App != "" {
+			fail(w, http.StatusNotFound, "no site %s", req.Site)
+			return
+		}
+		reply, err := d.setupReverbEnv(s)
+		if err != nil {
+			fail(w, http.StatusBadRequest, "%v", err)
+			return
+		}
+		writeJSON(w, reply)
+	})
 }

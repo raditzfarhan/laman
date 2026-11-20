@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"laman/internal/config"
+	"laman/internal/redisq"
 	"laman/internal/sites"
 
 	"golang.org/x/sys/windows"
@@ -559,5 +562,225 @@ func TestReverbPorts(t *testing.T) {
 	got := d.reverbPorts()
 	if len(got) != 1 || got["acme.test"] != 8101 {
 		t.Fatalf("reverbPorts = %v, want only acme.test:8101", got)
+	}
+}
+
+// routeFixture: a worker fixture with the worker routes on a mux, Caddy
+// refreshes counted instead of run.
+func routeFixture(t *testing.T, env string) (*workerFixture, *http.ServeMux, *int) {
+	t.Helper()
+	f := newWorkerFixture(t, env, func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	caddy := new(int)
+	old := workersCaddyChanged
+	t.Cleanup(func() { workersCaddyChanged = old })
+	workersCaddyChanged = func(*daemon) { *caddy++ }
+	mux := http.NewServeMux()
+	f.d.workerRoutes(mux)
+	return f, mux, caddy
+}
+
+func TestWorkerSwitchRoute(t *testing.T) {
+	f, mux, caddy := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=sqs\n")
+
+	rec := call(mux, "POST", "/api/workers/queue/switch", `{"site":"acme.test","on":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("queue on: %d %s", rec.Code, rec.Body)
+	}
+	var st WorkerStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil || st.State != workerRunning {
+		t.Errorf("queue on reply = %+v, %v", st, err)
+	}
+	if cfg, _ := config.Load(); !cfg.QueueWorkers["acme"] {
+		t.Errorf("queue switch not saved: %v", cfg.QueueWorkers)
+	}
+	var list []WorkerStatus
+	json.Unmarshal(call(mux, "GET", "/api/workers", "").Body.Bytes(), &list)
+	if len(list) != 1 || list[0].Kind != workerQueue || list[0].Host != "acme.test" {
+		t.Errorf("GET /api/workers = %+v", list)
+	}
+	if *caddy != 0 {
+		t.Errorf("queue switch refreshed Caddy %d times", *caddy)
+	}
+
+	rec = call(mux, "POST", "/api/workers/queue/switch", `{"site":"acme","on":false}`)
+	st = WorkerStatus{}
+	json.Unmarshal(rec.Body.Bytes(), &st)
+	if rec.Code != http.StatusOK || st.State != workerOff {
+		t.Errorf("queue off: %d %+v", rec.Code, st)
+	}
+	if got := f.d.workerState(workerQueue, "acme.test").State; got != workerOff {
+		t.Errorf("state after off = %q", got)
+	}
+	if cfg, _ := config.Load(); cfg.QueueWorkers["acme"] {
+		t.Errorf("queue still on in config")
+	}
+	if body := call(mux, "GET", "/api/workers", "").Body.String(); strings.TrimSpace(body) != "[]" {
+		t.Errorf("GET /api/workers after off = %s", body)
+	}
+
+	// Reverb: a port is assigned and saved on first on, and Caddy follows.
+	rec = call(mux, "POST", "/api/workers/reverb/switch", `{"site":"acme.test","on":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reverb on: %d %s", rec.Code, rec.Body)
+	}
+	cfg, _ := config.Load()
+	if p := cfg.ReverbPorts["acme"]; !cfg.Reverb["acme"] || p != config.ReverbFirstPort {
+		t.Errorf("reverb config = %v %v", cfg.Reverb, cfg.ReverbPorts)
+	}
+	if *caddy != 1 {
+		t.Errorf("Caddy refreshes = %d, want 1", *caddy)
+	}
+	call(mux, "POST", "/api/workers/reverb/switch", `{"site":"acme.test","on":false}`)
+	cfg, _ = config.Load()
+	if cfg.Reverb["acme"] || cfg.ReverbPorts["acme"] != config.ReverbFirstPort || *caddy != 2 {
+		t.Errorf("reverb off: %v %v, caddy %d (the port stays assigned)", cfg.Reverb, cfg.ReverbPorts, *caddy)
+	}
+}
+
+func TestWorkerSwitchRefused(t *testing.T) {
+	_, mux, _ := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=sync\n")
+	rec := call(mux, "POST", "/api/workers/queue/switch", `{"site":"acme.test","on":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Jobs run inline (QUEUE_CONNECTION=sync)") {
+		t.Errorf("inline queue on: %d %s", rec.Code, rec.Body)
+	}
+	if cfg, _ := config.Load(); cfg.QueueWorkers["acme"] {
+		t.Errorf("inline queue was saved on")
+	}
+	if rec := call(mux, "POST", "/api/workers/nope/switch", `{"site":"acme.test","on":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown kind: %d", rec.Code)
+	}
+	if rec := call(mux, "POST", "/api/workers/reverb/switch", `{"site":"gone.test","on":true}`); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown site: %d", rec.Code)
+	}
+}
+
+func TestWorkerSwitchNotLaravel(t *testing.T) {
+	f, mux, _ := routeFixture(t, "")
+	os.Remove(filepath.Join(f.dir, "artisan"))
+	rec := call(mux, "POST", "/api/workers/reverb/switch", `{"site":"acme.test","on":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not a Laravel app") {
+		t.Errorf("non-Laravel on: %d %s", rec.Code, rec.Body)
+	}
+	if cfg, _ := config.Load(); cfg.Reverb["acme"] {
+		t.Errorf("saved on for a non-Laravel site")
+	}
+}
+
+func TestWorkerRestartAndLogRoutes(t *testing.T) {
+	f, mux, _ := routeFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=sqs\n")
+	if rec := call(mux, "POST", "/api/workers/queue/restart", `{"site":"acme.test"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("restart while off: %d %s", rec.Code, rec.Body)
+	}
+	call(mux, "POST", "/api/workers/queue/switch", `{"site":"acme.test","on":true}`)
+	rec := call(mux, "POST", "/api/workers/queue/restart", `{"site":"acme.test"}`)
+	var st WorkerStatus
+	json.Unmarshal(rec.Body.Bytes(), &st)
+	if rec.Code != http.StatusOK || st.State != workerRunning || f.count() != 2 {
+		t.Errorf("restart: %d %+v, starts %d", rec.Code, st, f.count())
+	}
+	f.d.worker(workerQueue, "acme.test").addLine("hello from the worker")
+	rec = call(mux, "GET", "/api/workers/queue/log?site=acme.test", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "hello from the worker") ||
+		!strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
+		t.Errorf("log: %d %q %s", rec.Code, rec.Header().Get("Content-Type"), rec.Body)
+	}
+}
+
+// reverbOn switches Reverb on for acme in the daemon's config, port 8101.
+func reverbOn(f *workerFixture) {
+	f.d.cfg.Reverb["acme"] = true
+	f.d.cfg.ReverbPorts = map[string]int{"acme": 8101}
+}
+
+func TestReverbEnvRouteNeedsKey(t *testing.T) {
+	const env = "APP_KEY=x\r\nBROADCAST_CONNECTION=log\r\n"
+	f, mux, _ := routeFixture(t, env)
+	reverbOn(f)
+	rec := call(mux, "POST", "/api/reverb/env", `{"site":"acme.test"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "run php artisan reverb:install first") {
+		t.Errorf("no key: %d %s", rec.Code, rec.Body)
+	}
+	if b, _ := os.ReadFile(filepath.Join(f.dir, ".env")); string(b) != env {
+		t.Errorf(".env changed: %q", b)
+	}
+	if exists(filepath.Join(f.dir, ".env.laman-backup")) {
+		t.Errorf("backup written")
+	}
+}
+
+func TestReverbEnvRouteNeedsReverbOn(t *testing.T) {
+	_, mux, _ := routeFixture(t, "APP_KEY=x\nREVERB_APP_KEY=abc\n")
+	if rec := call(mux, "POST", "/api/reverb/env", `{"site":"acme.test"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("reverb off: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestReverbEnvRouteWrites(t *testing.T) {
+	f, mux, _ := routeFixture(t, "APP_KEY=x\nREVERB_APP_KEY=abc\nREVERB_PORT=443\n")
+	reverbOn(f)
+	f.d.cfg.HTTPSPort = 8443
+	f.d.certHosts = map[string]bool{"acme.test": true}
+
+	rec := call(mux, "POST", "/api/reverb/env", `{"site":"acme.test"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("env: %d %s", rec.Code, rec.Body)
+	}
+	var reply struct {
+		Changed      []string `json:"changed"`
+		ConfigCached bool     `json:"configCached"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &reply)
+	if len(reply.Changed) != 9 || reply.ConfigCached {
+		t.Errorf("reply = %+v", reply)
+	}
+	b, _ := os.ReadFile(filepath.Join(f.dir, ".env"))
+	for _, want := range []string{"REVERB_PORT=8443\n", "REVERB_SCHEME=https\n", "REVERB_HOST=acme.test\n", "REVERB_SERVER_PORT=8101\n", "VITE_REVERB_PORT=8443\n", "REVERB_APP_KEY=abc\n"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf(".env has no %q:\n%s", want, b)
+		}
+	}
+
+	// Again: nothing to change; a cached config is reported.
+	writeFile(t, f.dir, "bootstrap/cache/config.php", "<?php return [];")
+	rec = call(mux, "POST", "/api/reverb/env", `{"site":"acme.test"}`)
+	if body := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || body != `{"changed":[],"configCached":true}` {
+		t.Errorf("second run: %d %s", rec.Code, body)
+	}
+}
+
+func TestSiteEndpoint(t *testing.T) {
+	d := &daemon{cfg: config.Default()}
+	d.cfg.HTTPPort, d.cfg.HTTPSPort = 8080, 8443
+	d.certHosts = map[string]bool{"acme.test": true}
+	if s, p := d.siteEndpoint("acme.test"); s != "https" || p != 8443 {
+		t.Errorf("with cert: %s %d", s, p)
+	}
+	if s, p := d.siteEndpoint("blog.test"); s != "http" || p != 8080 {
+		t.Errorf("without cert: %s %d", s, p)
+	}
+	d.cfg.HTTPSPort = 0
+	if s, p := d.siteEndpoint("acme.test"); s != "http" || p != 8080 {
+		t.Errorf("HTTPS off: %s %d", s, p)
+	}
+}
+
+func TestQueueRowsNoWorker(t *testing.T) {
+	f := newWorkerFixture(t, "APP_KEY=x\nQUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	rows := []queueRow{
+		{Queue: redisq.Queue{Name: "default", Waiting: 3}, Site: "acme.test"},
+		{Queue: redisq.Queue{Name: "mail", Reserved: 1}, Site: "acme.test"}, // only being worked on
+		{Queue: redisq.Queue{Name: "default", Waiting: 1}},                  // no known site
+	}
+	f.d.markNoWorker(rows)
+	if !rows[0].NoWorker || rows[1].NoWorker || rows[2].NoWorker {
+		t.Errorf("no worker running: %+v", rows)
+	}
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	rows[0].NoWorker = false
+	f.d.markNoWorker(rows)
+	if rows[0].NoWorker {
+		t.Errorf("worker running, still flagged")
 	}
 }
