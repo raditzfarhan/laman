@@ -40,7 +40,8 @@ func newWorkerFixture(t *testing.T, env string, cmd func() *exec.Cmd) *workerFix
 	}
 	f := &workerFixture{dir: dir}
 	f.d = &daemon{cfg: config.Default(), sites: []sites.Site{{Name: "acme", Host: "acme.test", Path: dir}}}
-	f.d.cfg.QueueWorkers, f.d.cfg.Reverb = map[string]bool{}, map[string]bool{}
+	// Both switched on: startWorker refuses a worker that is off.
+	f.d.cfg.QueueWorkers, f.d.cfg.Reverb = map[string]bool{"acme": true}, map[string]bool{"acme": true}
 
 	oldCmd, oldBackoff, oldWindow := workerCommand, workerBackoff, workerWindow
 	oldStop, oldReady := workerStopWait, workerReadyWait
@@ -75,6 +76,50 @@ func eventually(t *testing.T, within time.Duration, cond func() bool) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return cond()
+}
+
+// setSwitch switches a worker of acme on or off in the daemon's config only.
+func (f *workerFixture) setSwitch(kind string, on bool) {
+	f.d.mu.Lock()
+	defer f.d.mu.Unlock()
+	m := f.d.cfg.QueueWorkers
+	if kind == workerReverb {
+		m = f.d.cfg.Reverb
+	}
+	if on {
+		m["acme"] = true
+	} else {
+		delete(m, "acme")
+	}
+}
+
+func TestStartWorkerNeedsSwitchOn(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	f.setSwitch(workerQueue, false)
+	err := f.d.startWorker(workerQueue, "acme.test")
+	if err == nil || !strings.Contains(err.Error(), "the queue worker is off for acme.test") {
+		t.Errorf("start while off: err = %v", err)
+	}
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerOff || f.count() != 0 {
+		t.Errorf("start while off: %+v, starts %d", st, f.count())
+	}
+
+	// On, running; then switched off (as the switch route does): a restart,
+	// from any path, must not bring it back.
+	f.setSwitch(workerQueue, true)
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	f.setSwitch(workerQueue, false)
+	f.d.switchWorkerOff(workerQueue, "acme.test")
+	if err := f.d.restartWorker(workerQueue, "acme.test"); err == nil {
+		t.Errorf("restartWorker of a switched-off worker: no error")
+	}
+	f.d.restartSiteWorkers("acme")
+	f.d.workersServiceChanged()
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerOff || st.PID != 0 || f.count() != 1 {
+		t.Errorf("after restarts of a switched-off worker: %+v, starts %d", st, f.count())
+	}
 }
 
 func TestRestartDelay(t *testing.T) {
@@ -394,7 +439,8 @@ func TestGoneSiteSwitchedOffStaysOff(t *testing.T) {
 	}
 	setSites(f.d)
 	f.d.syncWorkers()
-	setSites(f.d, acme) // back, but its switch is off
+	f.setSwitch(workerQueue, false) // switched off while the site was gone
+	setSites(f.d, acme)             // back, but its switch is off
 	f.d.syncWorkers()
 	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerOff {
 		t.Errorf("state = %+v, want off", st)
@@ -432,6 +478,7 @@ func TestSyncWorkersRestartsOnPHPChange(t *testing.T) {
 func TestSyncWorkersLeavesStoppedAlone(t *testing.T) {
 	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
 	f.d.cfg.QueueWorkers["acme"] = true
+	f.setSwitch(workerReverb, false)
 	acme := f.d.sites[0]
 	acme.PHP = "8.3.10"
 	setSites(f.d, acme)
@@ -455,6 +502,7 @@ func TestStartAutoWorkers(t *testing.T) {
 	os.WriteFile(filepath.Join(other, ".env"), []byte("QUEUE_CONNECTION=sqs\n"), 0o644)
 	setSites(f.d, f.d.sites[0], sites.Site{Name: "beta", Host: "beta.test", Path: other})
 	f.d.cfg.QueueWorkers["acme"] = true
+	delete(f.d.cfg.Reverb, "acme")
 
 	f.d.syncWorkers() // before the start with laman: nothing starts
 	if n := f.count(); n != 0 {
@@ -570,6 +618,8 @@ func TestReverbPorts(t *testing.T) {
 func routeFixture(t *testing.T, env string) (*workerFixture, *http.ServeMux, *int) {
 	t.Helper()
 	f := newWorkerFixture(t, env, func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	// Off: the routes switch them.
+	f.d.cfg.QueueWorkers, f.d.cfg.Reverb = map[string]bool{}, map[string]bool{}
 	caddy := new(int)
 	old := workersCaddyChanged
 	t.Cleanup(func() { workersCaddyChanged = old })

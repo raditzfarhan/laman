@@ -178,7 +178,8 @@ func (d *daemon) workerLog(kind, host string) string {
 
 // startWorker starts a site's queue worker or Reverb server. Starting one
 // that runs (or waits to restart) is a no-op; one that waits for a service,
-// crashed or was stopped is started afresh.
+// crashed or was stopped is started afresh. A worker switched off in the
+// config is not started.
 func (d *daemon) startWorker(kind, host string) error {
 	if kind != workerQueue && kind != workerReverb {
 		return fmt.Errorf("unknown worker %q", kind)
@@ -191,6 +192,13 @@ func (d *daemon) startWorker(kind, host string) error {
 		return fmt.Errorf("%s is not a Laravel app", site.Host)
 	}
 	d.mu.Lock()
+	// Checked under d.mu, which the switch route also holds when it changes
+	// the switch: a switch-off then either comes first (and this start is
+	// refused) or comes after (and stops what this starts).
+	if !d.switchedOn(kind, site.Name) {
+		d.mu.Unlock()
+		return fmt.Errorf("the %s worker is off for %s", kind, site.Host)
+	}
 	if d.workers == nil {
 		d.workers = map[string]*worker{}
 	}
