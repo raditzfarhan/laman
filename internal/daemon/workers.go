@@ -69,6 +69,15 @@ func restartDelay(n int) time.Duration {
 	return d
 }
 
+// workerRun is one started process. Its handle keeps the pid from being
+// reused until the exit is processed (children killed, pid cleared) and
+// every kill that read the pid meanwhile is done.
+type workerRun struct {
+	pid   int
+	h     uintptr
+	kills sync.WaitGroup // kills in progress; added to only under the worker's mu while it is w.run
+}
+
 type worker struct {
 	kind string
 	site sites.Site
@@ -78,6 +87,7 @@ type worker struct {
 	port    int    // Reverb's port
 	phpExe  string // the site's php.exe, set before each start
 	pid     int
+	run     *workerRun // the started process, until its exit is processed
 	cmdline string
 	note    string
 	waiting string // why it waits ("Redis is off")
@@ -359,8 +369,11 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 	}
 	pw.Close() // the process has its copy; reading ends when every holder closes it
 	pid := cmd.Process.Pid
+	// Held from here, while Go's own handle is still open, so the id stays
+	// this process's until the exit below is fully processed.
+	run := &workerRun{pid: pid, h: holdProcess(pid)}
 	done := make(chan struct{})
-	w.pid, w.cmdline, w.since, w.done, w.errMsg = pid, line, time.Now(), done, ""
+	w.pid, w.run, w.cmdline, w.since, w.done, w.errMsg = pid, run, line, time.Now(), done, ""
 	if w.kind == workerReverb {
 		w.state = workerStarting // running once its port answers
 	} else {
@@ -377,17 +390,24 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 		// A crashed queue:listen can leave its queue:work child running;
 		// end whatever it left behind before a restart starts another.
 		killChildren(pid, startedAt)
-		d.workerExited(w, gen, err)
+		d.workerExited(w, gen, run, err)
 		close(done)
+		// No new kill can read the pid now (w.run is no longer run); wait
+		// for those under way, then let Windows reuse the id.
+		run.kills.Wait()
+		releaseProcess(run.h)
 	}()
 	return nil
 }
 
 // workerExited records an exit: a stop, or a crash that is retried after a
 // delay unless it crashed too often lately.
-func (d *daemon) workerExited(w *worker, gen int, err error) {
+func (d *daemon) workerExited(w *worker, gen int, run *workerRun, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.run == run {
+		w.run, w.pid = nil, 0
+	}
 	if w.gen != gen {
 		return // a newer start owns the worker (and its pid)
 	}
@@ -471,10 +491,12 @@ func waitWorkerPort(w *worker, gen, pid, port int) {
 	w.state, w.errMsg, w.failed = workerCrashed, msg, true
 	w.addLineLocked("[laman] " + msg)
 	host := w.site.Host
+	release := w.claimRun()
 	w.mu.Unlock()
 	if err := killTree(pid); err != nil {
 		logf("ending reverb for %s (pid %d): %v", host, pid, err)
 	}
+	release()
 }
 
 // waitText: "1 minute" for the default wait, else Go's duration text.
@@ -591,13 +613,15 @@ func (d *daemon) stopWorkerWait(kind, host string) bool {
 	if w == nil {
 		return true
 	}
-	pid, done := w.halt()
+	pid, done, release := w.halt()
 	if pid == 0 {
+		release()
 		return true
 	}
 	if err := killTree(pid); err != nil {
 		logf("stopping %s worker %s (pid %d): %v", kind, host, pid, err)
 	}
+	release()
 	select {
 	case <-done:
 		return true
@@ -607,8 +631,9 @@ func (d *daemon) stopWorkerWait(kind, host string) bool {
 }
 
 // halt marks w stopped and cancels any pending restart. It returns the
-// running process, if any, for the caller to kill.
-func (w *worker) halt() (int, chan struct{}) {
+// running process, if any, for the caller to kill, and release, which the
+// caller calls once done with the pid (until then the pid is not reused).
+func (w *worker) halt() (int, chan struct{}, func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.stop, w.errMsg = true, ""
@@ -619,7 +644,18 @@ func (w *worker) halt() (int, chan struct{}) {
 	if w.pid == 0 && w.state != workerOff {
 		w.state = w.stoppedState()
 	}
-	return w.pid, w.done
+	return w.pid, w.done, w.claimRun()
+}
+
+// claimRun keeps the running process's pid reserved until the returned
+// func is called, even if the process exits meanwhile. Callers hold w.mu.
+func (w *worker) claimRun() func() {
+	r := w.run
+	if r == nil {
+		return func() {}
+	}
+	r.kills.Add(1)
+	return r.kills.Done
 }
 
 // stoppedState: what a stopped worker shows, off after a switch-off.
@@ -648,9 +684,11 @@ func (d *daemon) stopAllWorkers() {
 	}
 	d.mu.Unlock()
 	for _, w := range ws {
-		if pid, _ := w.halt(); pid != 0 {
+		pid, _, release := w.halt()
+		if pid != 0 {
 			killTree(pid)
 		}
+		release()
 	}
 }
 

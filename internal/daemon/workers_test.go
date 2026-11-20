@@ -282,7 +282,7 @@ func TestWorkerCrashListResetsAfterLongRun(t *testing.T) {
 	// Four quick crashes, then one after a run longer than the window: the
 	// list starts over and a restart is scheduled.
 	w.crashes, w.since = recent(), time.Now().Add(-2*time.Minute)
-	f.d.workerExited(w, 1, nil)
+	f.d.workerExited(w, 1, nil, nil)
 	w.mu.Lock()
 	n, state, timer := len(w.crashes), w.state, w.timer
 	w.mu.Unlock()
@@ -295,7 +295,7 @@ func TestWorkerCrashListResetsAfterLongRun(t *testing.T) {
 	w.mu.Lock()
 	w.stop, w.state, w.crashes, w.since = false, workerRunning, recent(), time.Now().Add(-time.Second)
 	w.mu.Unlock()
-	f.d.workerExited(w, 1, nil)
+	f.d.workerExited(w, 1, nil, nil)
 	if st := w.status(); st.State != workerCrashed {
 		t.Errorf("after a quick fifth crash: state %q, want crashed", st.State)
 	}
@@ -979,5 +979,55 @@ func TestConfigWritersKeepWorkerSwitches(t *testing.T) {
 	}
 	if cfg.Theme != "dark" {
 		t.Errorf("theme %q", cfg.Theme)
+	}
+}
+
+// processCreated returns when the process with the id was created, and
+// whether one with that id exists (running, or ended but still held open).
+func processCreated(pid int) (time.Time, bool) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer windows.CloseHandle(h)
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(0, created.Nanoseconds()), true
+}
+
+func TestWorkerPidReservedUntilKillDone(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=sqs\n", func() *exec.Cmd { return shellCmd("ping -n 2 127.0.0.1 >nul") })
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	w := f.d.worker(workerQueue, "acme.test")
+	pid := w.status().PID
+	created, ok := processCreated(pid)
+	if !ok {
+		t.Fatalf("pid %d not found right after the start", pid)
+	}
+	// A stop reads the pid; the process then exits on its own before the
+	// stop gets to kill it.
+	got, _, release := w.halt()
+	if got != pid {
+		t.Fatalf("halt returned pid %d, want %d", got, pid)
+	}
+	if !eventually(t, 5*time.Second, func() bool { st := w.status(); return st.State == workerStopped && st.PID == 0 }) {
+		t.Fatalf("exit not processed: %+v", w.status())
+	}
+	// The exit is processed, but until the stop is done with the pid it
+	// stays this (ended) process, so a kill cannot hit another one.
+	time.Sleep(100 * time.Millisecond)
+	if c, ok := processCreated(pid); !ok || !c.Equal(created) {
+		t.Fatalf("pid %d was given up before the stop was done with it (found %v, created %v, want %v)", pid, ok, c, created)
+	}
+	if processAlive(pid) {
+		t.Fatalf("pid %d still runs", pid)
+	}
+	release()
+	if !eventually(t, 5*time.Second, func() bool { c, ok := processCreated(pid); return !ok || !c.Equal(created) }) {
+		t.Errorf("pid %d still held after the stop was done", pid)
 	}
 }

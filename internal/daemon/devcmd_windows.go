@@ -32,6 +32,24 @@ func killTree(pid int) error {
 	return c.Run()
 }
 
+// holdProcess opens a handle on the process: Windows does not give its id
+// to another process while a handle is open, so a kill by id later still
+// reaches it (or nothing, once it ended). 0 when it cannot be opened.
+func holdProcess(pid int) uintptr {
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return 0
+	}
+	return uintptr(h)
+}
+
+// releaseProcess closes a handle from holdProcess; the id may then be reused.
+func releaseProcess(h uintptr) {
+	if h != 0 {
+		windows.CloseHandle(windows.Handle(h))
+	}
+}
+
 // killChildren ends what an exited process left running: the processes it
 // started, and theirs, found by parent id (Windows keeps that id after the
 // parent dies). Only processes created after started count, so ones that
