@@ -177,6 +177,7 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .devstate.crashed::before { background: var(--bad); }
 /* Running workers on Home: the bar above the sites, group counts, row marks, rail badge. */
 .wkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 10px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--code); font-size: 13px; }
+.wkbar[hidden], .nav-wk[hidden] { display: none; }
 .wkbar .wksum { margin-right: auto; }
 .wkbar .wksum b { font-variant-numeric: tabular-nums; }
 .wkbar .wkbad { color: var(--bad); }
