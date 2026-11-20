@@ -807,7 +807,7 @@ func TestReverbEnvRouteWrites(t *testing.T) {
 		t.Errorf("starts after a change = %d, want 2 (the running queue worker restarted)", n)
 	}
 	b, _ := os.ReadFile(filepath.Join(f.dir, ".env"))
-	for _, want := range []string{"REVERB_PORT=8443\n", "REVERB_SCHEME=https\n", "REVERB_HOST=acme.test\n", "REVERB_SERVER_PORT=8101\n", "VITE_REVERB_PORT=8443\n", "REVERB_APP_KEY=abc\n"} {
+	for _, want := range []string{"REVERB_PORT=8101\n", "REVERB_SCHEME=http\n", "REVERB_HOST=127.0.0.1\n", "REVERB_SERVER_PORT=8101\n", "VITE_REVERB_PORT=8443\n", "VITE_REVERB_SCHEME=https\n", "VITE_REVERB_HOST=acme.test\n", "REVERB_APP_KEY=abc\n"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf(".env has no %q:\n%s", want, b)
 		}

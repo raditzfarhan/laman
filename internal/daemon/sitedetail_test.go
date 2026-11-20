@@ -110,7 +110,7 @@ func TestWorkersFactReverbOn(t *testing.T) {
 	writeFile(t, dir, "artisan", "<?php\n")
 	writeFile(t, dir, "composer.json", `{"require":{"laravel/reverb":"^1.0"}}`)
 	writeFile(t, dir, ".env", "APP_KEY=x\nQUEUE_CONNECTION=sync\nREVERB_APP_KEY=abc\n"+
-		"BROADCAST_CONNECTION=reverb\nREVERB_HOST=acme.test\nREVERB_PORT=8443\nREVERB_SCHEME=https\n"+
+		"BROADCAST_CONNECTION=reverb\nREVERB_HOST=127.0.0.1\nREVERB_PORT=8101\nREVERB_SCHEME=http\n"+
 		"REVERB_SERVER_HOST=127.0.0.1\nREVERB_SERVER_PORT=8101\nVITE_REVERB_HOST=acme.test\nVITE_REVERB_PORT=8443\nVITE_REVERB_SCHEME=http\n")
 	d, mux := detailFixture(t, sites.Site{Name: "acme", Host: "acme.test", Path: dir, Kind: sites.KindPHP})
 	d.cfg.HTTPSPort = 8443

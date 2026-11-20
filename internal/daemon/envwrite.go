@@ -17,17 +17,19 @@ import (
 type envKV struct{ Key, Value string }
 
 // reverbEnv is what laman wants in a project's .env for Reverb behind its
-// proxy: clients use host/scheme/port, the Reverb server itself listens on
-// loopback at reverbPort.
+// proxy: the browser (VITE_*) uses the site's host/scheme/port, while PHP
+// (REVERB_*) talks straight to the Reverb process on loopback over plain http,
+// since PHP does not trust laman's local CA.
 func reverbEnv(host, scheme string, port, reverbPort int) []envKV {
 	p := strconv.Itoa(port)
+	rp := strconv.Itoa(reverbPort)
 	return []envKV{
 		{"BROADCAST_CONNECTION", "reverb"},
-		{"REVERB_HOST", host},
-		{"REVERB_PORT", p},
-		{"REVERB_SCHEME", scheme},
+		{"REVERB_HOST", "127.0.0.1"},
+		{"REVERB_PORT", rp},
+		{"REVERB_SCHEME", "http"},
 		{"REVERB_SERVER_HOST", "127.0.0.1"},
-		{"REVERB_SERVER_PORT", strconv.Itoa(reverbPort)},
+		{"REVERB_SERVER_PORT", rp},
 		{"VITE_REVERB_HOST", host},
 		{"VITE_REVERB_PORT", p},
 		{"VITE_REVERB_SCHEME", scheme},

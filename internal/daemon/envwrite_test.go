@@ -10,9 +10,9 @@ import (
 func TestReverbEnv(t *testing.T) {
 	want := []envKV{
 		{"BROADCAST_CONNECTION", "reverb"},
-		{"REVERB_HOST", "acme.test"},
-		{"REVERB_PORT", "443"},
-		{"REVERB_SCHEME", "https"},
+		{"REVERB_HOST", "127.0.0.1"},
+		{"REVERB_PORT", "8101"},
+		{"REVERB_SCHEME", "http"},
 		{"REVERB_SERVER_HOST", "127.0.0.1"},
 		{"REVERB_SERVER_PORT", "8101"},
 		{"VITE_REVERB_HOST", "acme.test"},
