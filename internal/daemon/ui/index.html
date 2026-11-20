@@ -175,6 +175,19 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .devstate.starting::before { background: var(--warn); animation: pulse 1s ease-in-out infinite alternate; }
 .devstate.crashed { color: var(--bad); }
 .devstate.crashed::before { background: var(--bad); }
+/* Running workers on Home: the bar above the sites, group counts, row marks, rail badge. */
+.wkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 10px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--code); font-size: 13px; }
+.wkbar .wksum { margin-right: auto; }
+.wkbar .wksum b { font-variant-numeric: tabular-nums; }
+.wkbar .wkbad { color: var(--bad); }
+.wkbar .wkwarn { color: var(--warn); }
+.wkmarks { display: inline-flex; gap: 8px; margin-left: 8px; vertical-align: 1px; }
+.wkmark { text-decoration: none; font-size: 11px; }
+.wkmark:hover, .wkmark:focus-visible { text-decoration: underline; }
+.grp .gwk { font-size: 12px; }
+.nav-wk { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px; font: 11px/18px var(--mono); text-align: center; background: var(--ok); color: #fff; }
+.nav-wk.bad { background: var(--bad); }
+.nav-wk + .count { margin-left: 6px; }
 @keyframes pulse { from { opacity: 1; } to { opacity: .3; } }
 .devout { grid-column: 1 / -1; display: grid; gap: 8px; margin-top: -4px; }
 .devout pre { margin: 0; padding: 10px 12px; max-height: 260px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; color: var(--ink); }
@@ -607,7 +620,7 @@ body.down .view, body.down .notes { display: none; }
   <aside class="rail">
     <a class="brand" href="#home" aria-label="laman home"><svg class="lockup" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 835 256" aria-hidden="true" focusable="false"><path fill="currentColor" d="M37.01 166.48L150.51 52.97L135.50 37.97L22.00 151.47ZM105.49 52.97L218.99 166.48L234.00 151.47L120.50 37.97ZM120.50 128.00L158.01 165.51L120.50 203.03L135.50 218.03L188.02 165.51L135.50 112.99Z"/><rect x="198.63" y="196.81" width="35.37" height="21.22" fill="#E2583E"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M0.0 0H21.0V-142L0.0 -121Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" fill-rule="evenodd" d="M37.0 -48A48 48 0 1 0 133.0 -48A48 48 0 1 0 37.0 -48ZM58.0 -48A27 27 0 1 0 112.0 -48A27 27 0 1 0 58.0 -48Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M112.0 0H133.0V-96H112.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M153.0 0H174.0V-96H153.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M153.0 0V-53A43 43 0 0 1 239.0 -53V0H218.0V-53A22 22 0 0 0 174.0 -53V0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M218.0 0V-53A43 43 0 0 1 304.0 -53V0H283.0V-53A22 22 0 0 0 239.0 -53V0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" fill-rule="evenodd" d="M321.0 -48A48 48 0 1 0 417.0 -48A48 48 0 1 0 321.0 -48ZM342.0 -48A27 27 0 1 0 396.0 -48A27 27 0 1 0 342.0 -48Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M396.0 0H417.0V-96H396.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M437.0 0H458.0V-96H437.0Z"/><path transform="translate(280.00 218.03) scale(1)" fill="currentColor" d="M437.0 0V-48A48 48 0 0 1 533.0 -48V0H512.0V-48A27 27 0 0 0 458.0 -48V0Z"/></svg></a>
     <nav class="nav" id="nav" aria-label="Sections">
-      <a href="#home" data-view="home">Home <span class="count" id="nav-sites"></span></a>
+      <a href="#home" data-view="home">Home <span class="nav-wk" id="nav-wk" hidden></span><span class="count" id="nav-sites"></span></a>
       <a href="#folders" data-view="folders">Project folders <span class="count" id="nav-folders"></span></a>
       <a href="#apps" data-view="apps">Apps <span class="count" id="nav-apps"></span></a>
       <a href="#queues" data-view="queues">Queues <span class="count" id="nav-queues"></span></a>
@@ -682,6 +695,7 @@ body.down .view, body.down .notes { display: none; }
           <span class="job" id="newjob" role="status"></span>
         </div>
       </form>
+      <div class="wkbar" id="wkbar" role="status" hidden></div>
       <div class="panel sites" id="sites"></div>
       <div class="panel empty-state" id="nosites" hidden>No sites yet. Make a folder in one of your <a href="#folders">project folders</a> (or run <code>laman link</code> in a project) and it appears here within a couple of seconds.</div>
     </section>

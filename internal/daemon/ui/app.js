@@ -177,7 +177,14 @@ function draw(force) {
   // place below so the rows (and their buttons) stay put.
   const devShape = (status.dev || []).map(({ uptime, ...rest }) => rest);
   if (changed("sites", [ownSites, status.php, installed, status.httpsPort, status.httpsTrusted, status.httpPort, shares, opening, copied, shareOpts,
-    status.shareDomain, shareCfg?.pattern, status.folders, status.editor, siteQuery(), [...folded], devShape, status.devAuto, [...devOpen], devBusy, devAsk, flashSite])) renderSites(ownSites, installed, shares);
+    status.shareDomain, shareCfg?.pattern, status.folders, status.editor, siteQuery(), [...folded], devShape, status.devAuto, [...devOpen], devBusy, devAsk, flashSite, status.workers, workersOnly])) renderSites(ownSites, installed, shares);
+  if (changed("wkbar", [status.workers, workersOnly, stopAllAsk, stopAllBusy])) renderWorkerBar();
+  const wks = status.workers || [];
+  const wkBadge = $("nav-wk");
+  wkBadge.hidden = !wks.length;
+  wkBadge.textContent = String(wks.length);
+  wkBadge.classList.toggle("bad", wks.some((w) => w.state === "crashed"));
+  wkBadge.title = wks.length ? `${wks.length} worker${wks.length === 1 ? "" : "s"} switched on` : "";
   for (const pre of document.querySelectorAll("[data-devout]")) {
     const text = devOut[pre.dataset.devout] ?? "Loading…";
     if (pre.textContent !== text) {
@@ -266,9 +273,72 @@ try {
 } catch { /* private window */ }
 const siteQuery = () => ($("sitefind")?.value || "").trim().toLowerCase();
 
+// Switched-on queue workers and Reverb servers, seen from Home (status.workers).
+let workersOnly = false;  // "Show": list only the sites with workers on
+let stopAllAsk = false;   // "Stop all" asked once; a second click does it
+let stopAllBusy = false;
+const WK_RANK = { crashed: 3, waiting: 2, starting: 2, running: 1 };
+const wkClass = (state) => state === "running" ? "running" : state === "crashed" ? "crashed" : WK_RANK[state] === 2 ? "starting" : "stopped";
+const worstState = (list) => list.reduce((a, w) => (WK_RANK[w.state] || 0) > (WK_RANK[a] || 0) ? w.state : a, "off");
+const workersOf = (host) => (status.workers || []).filter((w) => w.host === host);
+
+function renderWorkerBar() {
+  const bar = $("wkbar");
+  const wks = status.workers || [];
+  if (!wks.length) { workersOnly = false; stopAllAsk = false; bar.hidden = true; bar.replaceChildren(); return; }
+  const sitesOn = new Set(wks.map((w) => w.host)).size;
+  const count = (st) => wks.filter((w) => st.includes(w.state)).length;
+  const crashed = count(["crashed"]), waiting = count(["waiting", "starting"]);
+  const running = count(["running"]);
+  const stopAll = async () => {
+    if (!stopAllAsk) {
+      stopAllAsk = true;
+      render();
+      setTimeout(() => { if (stopAllAsk && !stopAllBusy) { stopAllAsk = false; render(); } }, 4000);
+      return;
+    }
+    stopAllBusy = true;
+    render();
+    const failed = [];
+    for (const w of [...wks]) {
+      try { await api("POST", `/api/workers/${w.kind}/switch`, { site: w.host, on: false }); }
+      catch (e) { failed.push(`${w.host} ${w.kind}: ${e.message}`); }
+    }
+    stopAllBusy = false;
+    stopAllAsk = false;
+    workersOnly = false;
+    if (failed.length) alertNote(`Could not switch off ${failed.length === 1 ? "a worker" : `${failed.length} workers`}: ${failed.join("; ")}`);
+    else alertNote(`Switched off ${wks.length} worker${wks.length === 1 ? "" : "s"}.`, "note info");
+    await refresh();
+  };
+  bar.hidden = false;
+  bar.replaceChildren(
+    el("span", { class: "wksum" },
+      running === wks.length ? "Workers running: " : "Workers on: ",
+      el("b", {}, `${wks.length}`), ` on ${sitesOn} site${sitesOn === 1 ? "" : "s"}`,
+      crashed ? el("span", { class: "wkbad" }, ` · ${crashed} crashed`) : null,
+      waiting ? el("span", { class: "wkwarn" }, ` · ${waiting} waiting`) : null),
+    el("button", { class: "inline", "aria-pressed": workersOnly ? "true" : "false",
+      title: workersOnly ? "List every site again" : "List only the sites with workers switched on",
+      onclick: () => { workersOnly = !workersOnly; render(true); } }, workersOnly ? "Show all" : "Show"),
+    el("button", { class: "inline", disabled: stopAllBusy,
+      title: "Switch off every queue worker and Reverb server (they stay off when laman restarts)",
+      onclick: stopAll }, stopAllBusy ? "Switching off…" : stopAllAsk ? `Switch off ${wks.length} worker${wks.length === 1 ? "" : "s"}?` : "Stop all"));
+}
+
+// A row's worker marks: one per switched-on worker, linking to the site's page.
+function workerMarks(host) {
+  const list = workersOf(host);
+  if (!list.length) return null;
+  return el("span", { class: "wkmarks" }, list.map((w) =>
+    el("a", { class: `wkmark devstate ${wkClass(w.state)}`, href: siteHash(host),
+      title: `${w.kind === "queue" ? "Queue worker" : "Reverb"}: ${w.state}` }, w.kind)));
+}
+
 function renderSites(ownSites, installed, shares) {
   const q = siteQuery();
-  const match = (s) => !q || s.host.toLowerCase().includes(q) || s.path.toLowerCase().includes(q);
+  const withWorkers = new Set((status.workers || []).map((w) => w.host));
+  const match = (s) => (!q || s.host.toLowerCase().includes(q) || s.path.toLowerCase().includes(q)) && (!workersOnly || withWorkers.has(s.host));
   const groups = (status.folders || []).map((f) => ({ key: f.dir, title: f.dir, prefix: f.prefix, list: [] }));
   const linked = { key: "", title: "Linked", list: [] };
   // Folders with nothing a browser can open go last, folded unless opened
@@ -292,8 +362,9 @@ function renderSites(ownSites, installed, shares) {
   const out = [];
   for (const g of used) {
     const shown = g.list.filter(match);
-    if (q && !shown.length) continue;
-    const isFolded = !q && !flat && (g.key === NONE ? !folded.has(g.key) : folded.has(g.key));
+    if ((q || workersOnly) && !shown.length) continue;
+    const isFolded = !q && !workersOnly && !flat && (g.key === NONE ? !folded.has(g.key) : folded.has(g.key));
+    const gw = (status.workers || []).filter((w) => g.list.some((s) => s.host === w.host));
     if (!flat) {
       out.push(el("button", { class: "grp", "aria-expanded": isFolded ? "false" : "true",
         title: isFolded ? "Show these sites" : "Hide these sites",
@@ -308,7 +379,9 @@ function renderSites(ownSites, installed, shares) {
         el("span", { class: "gname" }, g.key === NONE ? g.title : g.key ? g.title.split(/[\\/]/).filter(Boolean).pop() : "Linked"),
         g.key === NONE ? el("span", { class: "gpath" }, "no index.php, index.html or dev script: infra, docs, notes")
           : g.key ? el("span", { class: "gpath mono" }, shortPath(tidy(g.title))) : el("span", { class: "gpath" }, "folders served with laman link"),
-        el("span", { class: "gcount" }, q ? `${shown.length} of ${g.list.length}` : `${g.list.length} site${g.list.length === 1 ? "" : "s"}`)));
+        gw.length ? el("span", { class: `gwk devstate ${wkClass(worstState(gw))}`, title: gw.map((w) => `${w.host} ${w.kind}: ${w.state}`).join(", ") },
+          `${gw.length} worker${gw.length === 1 ? "" : "s"}`) : null,
+        el("span", { class: "gcount" }, q || workersOnly ? `${shown.length} of ${g.list.length}` : `${g.list.length} site${g.list.length === 1 ? "" : "s"}`)));
     }
     if (!isFolded) out.push(...shown.map((s) => siteRow(s, installed, shares)));
   }
@@ -396,6 +469,7 @@ function siteRow(s, installed, shares) {
       el("div", { class: "who" },
         el("a", { class: "host", href: siteHash(s.host), title: `${s.host}: details` }, s.host),
         s.linked ? el("span", { class: "tag" }, "linked") : null,
+        workerMarks(s.host),
         el("span", { class: "path", title: s.root }, shortPath(tidy(s.path)))),
       sel,
       s.phpFit ? phpFitAction(s.name, s.phpFit) : el("span"),
