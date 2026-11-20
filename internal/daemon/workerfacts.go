@@ -103,7 +103,7 @@ echo json_encode(array_keys($q));`
 func horizonQueues(phpExe, dir string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, phpExe, "-r", horizonQueuesPHP)
+	cmd := exec.CommandContext(ctx, phpExe, "-d", "display_errors=stderr", "-r", horizonQueuesPHP)
 	cmd.Dir = dir
 	noWindow(cmd)
 	var out bytes.Buffer
