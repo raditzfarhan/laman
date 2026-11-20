@@ -129,6 +129,7 @@ type daemon struct {
 	// workersReady: the start with laman has started the switched-on
 	// workers; from then on a rescan starts those of new sites. Guarded by mu.
 	workersReady bool
+	portWatch    map[string]*handle // add-on servers whose port is being watched for waiting workers; guarded by mu
 	quitOnce     sync.Once
 	updates      updater   // laman's own newer release, if any
 	sizes        sizeCache // project folder sizes for the site detail page
@@ -342,7 +343,7 @@ func (d *daemon) startService(kind string, s *Service) {
 		defer close(h.done)
 		s.Run(ctx)
 	}()
-	go d.awaitServiceForWorkers(kind, h.done) // workers waiting for it start once it answers
+	d.watchServicePort(kind) // workers waiting for it start once it answers
 }
 
 // stopService stops one add-on server and waits for it to exit.

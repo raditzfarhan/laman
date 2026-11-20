@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -492,11 +493,60 @@ func TestWorkersServiceChanged(t *testing.T) {
 	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerWaiting || f.count() != 0 {
 		t.Fatalf("with Redis off: %+v, starts %d", st, f.count())
 	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0") // Redis answering
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
 	f.d.mu.Lock()
+	f.d.cfg.RedisPort = ln.Addr().(*net.TCPAddr).Port
 	f.d.handles = map[string]*handle{"redis": {}}
 	f.d.mu.Unlock()
 	f.d.workersServiceChanged()
 	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerRunning || f.count() != 1 {
 		t.Errorf("after Redis came up: %+v, starts %d", st, f.count())
+	}
+}
+
+func TestQueueWaitsForServicePort(t *testing.T) {
+	f := newWorkerFixture(t, "QUEUE_CONNECTION=redis\nREDIS_HOST=127.0.0.1\n", func() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") })
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	h := &handle{done: make(chan struct{})}
+	t.Cleanup(func() { close(h.done) })
+	f.d.mu.Lock()
+	f.d.cfg.RedisPort = port
+	f.d.handles = map[string]*handle{"redis": h} // spawned, not answering yet
+	f.d.mu.Unlock()
+
+	if err := f.d.startWorker(workerQueue, "acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	st := f.d.workerState(workerQueue, "acme.test")
+	if st.State != workerWaiting || st.Waiting != "Waiting for Redis to start" || f.count() != 0 {
+		t.Fatalf("port closed: %+v, starts %d", st, f.count())
+	}
+	f.d.workersServiceChanged() // still closed: still waiting
+	if st := f.d.workerState(workerQueue, "acme.test"); st.State != workerWaiting || f.count() != 0 {
+		t.Fatalf("port still closed: %+v, starts %d", st, f.count())
+	}
+
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Skipf("port %d was taken meanwhile: %v", port, err)
+	}
+	defer ln.Close()
+	// The port watcher started by the wait notices on its own.
+	ok := eventually(t, 5*time.Second, func() bool { return f.d.workerState(workerQueue, "acme.test").State == workerRunning })
+	if !ok || f.count() != 1 {
+		t.Errorf("after the port opened: %+v, starts %d", f.d.workerState(workerQueue, "acme.test"), f.count())
+	}
+	f.d.workersServiceChanged() // running: no second start
+	if n := f.count(); n != 1 {
+		t.Errorf("starts = %d, want 1", n)
 	}
 }

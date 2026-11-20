@@ -51,9 +51,6 @@ var (
 	// workerWindow: workerMaxCrashes crashes within it and laman gives up;
 	// a run longer than it forgets earlier crashes.
 	workerWindow = 2 * time.Minute
-	// serviceUpWait: how long a started add-on server has to open its port
-	// before waiting workers are started anyway.
-	serviceUpWait = 30 * time.Second
 )
 
 // restartDelay: 2s, 4s, 8s, 16s, then 30s.
@@ -263,12 +260,23 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 		}
 		if plan.Needs != "" {
 			d.mu.Lock()
-			up := d.handles[plan.Needs] != nil
+			spawned := d.handles[plan.Needs] != nil
+			port := serverPort(d.cfg, plan.Needs)
 			d.mu.Unlock()
-			if !up {
+			// Spawned is not enough: a first MariaDB start can take a while
+			// to accept connections, and starting before then would burn
+			// through the crash limit.
+			why := ""
+			if !spawned {
+				why = serviceOffMsg(plan.Needs)
+			} else if port > 0 && !portOpen(port) {
+				why = "Waiting for " + kindNames[plan.Needs] + " to start"
+				d.watchServicePort(plan.Needs)
+			}
+			if why != "" {
 				w.mu.Lock()
 				if w.current(gen) {
-					w.state, w.waiting, w.note = workerWaiting, serviceOffMsg(plan.Needs), plan.Note
+					w.state, w.waiting, w.note = workerWaiting, why, plan.Note
 				}
 				w.mu.Unlock()
 				return nil
@@ -712,7 +720,9 @@ func (d *daemon) syncWorkers() {
 
 	for _, j := range gone {
 		logf("%s worker for %s: its site is gone, stopping", j.kind, j.host)
-		d.stopWorkerWait(j.kind, j.host)
+		if !d.stopWorkerWait(j.kind, j.host) {
+			logf("%s worker for %s: still stopping after %s", j.kind, j.host, workerStopWait)
+		}
 		j.w.mu.Lock()
 		j.w.gone = true
 		if j.w.pid == 0 {
@@ -783,25 +793,44 @@ func (d *daemon) restartSiteWorkers(name string) error {
 	return errors.Join(errs...)
 }
 
-// awaitServiceForWorkers waits (up to serviceUpWait) for an add-on server
-// to answer on its port, then starts the workers waiting for a service.
-func (d *daemon) awaitServiceForWorkers(kind string, done <-chan struct{}) {
+// watchServicePort waits for a running add-on server to answer on its port,
+// then starts the workers waiting for a service. It watches for as long as
+// that run of the server lasts (a slow first start may take minutes); a
+// server stopped meanwhile leaves its workers waiting until it is started
+// again, which watches anew. At most one watch per server runs at a time.
+func (d *daemon) watchServicePort(kind string) {
 	d.mu.Lock()
+	h := d.handles[kind]
 	port := serverPort(d.cfg, kind)
+	if h == nil || port <= 0 || d.portWatch[kind] == h {
+		d.mu.Unlock()
+		return // not running, not a service a worker needs (Mailpit), or this run is watched
+	}
+	if d.portWatch == nil {
+		d.portWatch = map[string]*handle{}
+	}
+	d.portWatch[kind] = h
 	d.mu.Unlock()
-	if port <= 0 {
-		return // not a service a worker needs (Mailpit)
-	}
-	deadline := time.Now().Add(serviceUpWait)
-	for !portOpen(port) {
-		if time.Now().After(deadline) {
-			break // start them anyway: they back off if it is not there
+	go func() {
+		open := portOpen(port)
+	poll:
+		for !open {
+			select {
+			case <-h.done:
+				break poll // stopped: its workers wait for the next start
+			case <-time.After(300 * time.Millisecond):
+				open = portOpen(port)
+			}
 		}
-		select {
-		case <-done:
-			return
-		case <-time.After(300 * time.Millisecond):
+		// Done watching before starting anyone, so a worker that finds the
+		// port closed again from here on starts a new watch.
+		d.mu.Lock()
+		if d.portWatch[kind] == h {
+			delete(d.portWatch, kind)
 		}
-	}
-	d.workersServiceChanged()
+		d.mu.Unlock()
+		if open {
+			d.workersServiceChanged()
+		}
+	}()
 }
