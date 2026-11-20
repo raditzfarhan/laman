@@ -29,7 +29,7 @@ func decodeEnvValue(raw string) (value string, quote byte, comment string, ok bo
 		}
 		value = raw[1:end]
 		if raw[0] == '"' {
-			value = strings.NewReplacer(`\"`, `"`, `\`, `\`).Replace(value)
+			value = unescapeDouble(value)
 		}
 		return value, raw[0], "", true
 	}
@@ -43,9 +43,32 @@ func decodeEnvValue(raw string) (value string, quote byte, comment string, ok bo
 	return raw, 0, "", true
 }
 
+// unescapeDouble translates the escapes phpdotenv 5 knows inside double
+// quotes (backslash, ", $, n r t f v after a backslash) in one left-to-right pass; any other
+// backslash stays as written.
+func unescapeDouble(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == bs && i+1 < len(s) {
+			if c, ok := envEscapes[s[i+1]]; ok {
+				b.WriteByte(c)
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+var envEscapes = map[byte]byte{bs: bs, '"': '"', '$': '$', 'n': '\n', 'r': '\r', 't': '\t', 'f': '\f', 'v': '\v'}
+
+const bs = '\x5c' // backslash
+
 // encodeEnvValue writes a value back as text: bare when that reads back the
-// same, else in the preferred quote ('\” falls back to '"' when the value
-// holds a single quote). Only inside '"' are `"` and `\` escaped.
+// same, else in the preferred quote (a single quote falls back to double
+// when the value holds a '). Only inside double quotes are \ and " escaped;
+// $ is left alone so ${VAR} stays an interpolation.
 func encodeEnvValue(value string, prefer byte) string {
 	if prefer == 0 && !strings.ContainsAny(value, " \t#\"'\n\r") {
 		return value
@@ -53,7 +76,7 @@ func encodeEnvValue(value string, prefer byte) string {
 	if prefer == '\'' && !strings.Contains(value, "'") {
 		return "'" + value + "'"
 	}
-	return `"` + strings.NewReplacer(`\`, `\`, `"`, `\"`).Replace(value) + `"`
+	return `"` + strings.NewReplacer(string(bs), string(bs)+string(bs), `"`, string(bs)+`"`).Replace(value) + `"`
 }
 
 // parseEnv returns the assignment lines of text in file order. A quoted

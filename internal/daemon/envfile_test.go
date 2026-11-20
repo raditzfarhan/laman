@@ -70,11 +70,30 @@ func TestViewMasksAndMissing(t *testing.T) {
 }
 
 func TestDecodeEncodeRoundTrip(t *testing.T) {
-	for _, v := range []string{`a"b`, `c\d`, "x y", "", "#h"} {
+	for _, v := range []string{`a"b`, `c\d`, "x y", "", "#h", "a" + bsl, "a" + bsl + `"b`, bsl + bsl, bsl + "n"} {
 		enc := encodeEnvValue(v, '"')
 		got, _, _, ok := decodeEnvValue(enc)
 		if !ok || got != v {
 			t.Errorf("%q -> %s -> %q ok=%v", v, enc, got, ok)
+		}
+	}
+}
+
+const bsl = string(bs)
+
+func TestDecodeEscapes(t *testing.T) {
+	for raw, want := range map[string]string{
+		`"C:` + bsl + bsl + `x"`: "C:" + bsl + "x",
+		`"a` + bsl + `"b"`:       `a"b`,
+		`"a` + bsl + `nb"`:       "a\nb",
+		`"a` + bsl + bsl + `"`:   "a" + bsl,
+		`"` + bsl + `$HOME"`:     "$HOME",
+		`"a` + bsl + `qb"`:       "a" + bsl + "qb",
+		`'a` + bsl + `nb'`:       "a" + bsl + "nb",
+	} {
+		got, _, _, ok := decodeEnvValue(raw)
+		if !ok || got != want {
+			t.Errorf("%s -> %q ok=%v, want %q", raw, got, ok, want)
 		}
 	}
 }
