@@ -80,12 +80,23 @@ func cmdWorker(kind string, args []string) error {
 			return err
 		}
 		var w daemon.WorkerStatus
-		_ = json.Unmarshal(b, &w)
+		if err := json.Unmarshal(b, &w); err != nil {
+			return err
+		}
 		if action == "off" {
 			fmt.Printf("Stopped %s's %s.\n", s.Host, label)
 			return nil
 		}
-		fmt.Printf("Started %s's %s.\n", s.Host, label)
+		switch w.State {
+		case "starting", "running", "waiting":
+			fmt.Printf("Started %s's %s.\n", s.Host, label)
+		case "crashed":
+			msg := fmt.Sprintf("Could not start %s's %s.", s.Host, label)
+			if w.Error != "" {
+				msg += "\n" + w.Error
+			}
+			return errors.New(msg)
+		}
 		printWorker(w)
 		if kind == "reverb" {
 			reverbAddress(s.Host)
