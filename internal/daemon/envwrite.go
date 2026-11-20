@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -51,68 +52,127 @@ func envMismatch(vals map[string]string, want []envKV) []string {
 	return out
 }
 
-// keyLinePrefix returns the part of line before the value (leading space,
-// optional `export `, `KEY=`) when line assigns key; ok is false otherwise.
-func keyLinePrefix(line, key string) (string, bool) {
-	rest := strings.TrimLeft(line, " \t")
-	lead := line[:len(line)-len(rest)]
-	if after, ok := strings.CutPrefix(rest, "export "); ok {
-		trimmed := strings.TrimLeft(after, " \t")
-		lead += rest[:len(rest)-len(after)] + after[:len(after)-len(trimmed)]
-		rest = trimmed
-	}
-	if strings.HasPrefix(rest, key+"=") {
-		return lead + key + "=", true
-	}
-	return "", false
+type envChange struct {
+	Op    string `json:"op"` // "set" | "delete"
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
-// writeEnvKeys replaces the first line of each key in path in place
-// (keeping indentation and any `export `), appends missing keys, and writes
-// the result atomically. Every other byte is kept. When that changes the
-// file, the file as it was is first copied to backup (overwriting it, with
-// the file's permission bits); wrote reports whether it changed.
+var envKeyName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// applyEnvChanges applies set/delete edits to .env text and returns the new
+// text. Only the lines of the edited keys change: a set rewrites the value of
+// the key's last assignment (prefix, spacing around `=`, quote style when
+// still valid, trailing comment and line ending are kept) or appends the key;
+// a delete drops every assignment line of the key.
+func applyEnvChanges(text string, changes []envChange) (string, error) {
+	if strings.Contains(strings.ReplaceAll(text, "\r\n", ""), "\r") {
+		return "", errors.New("unusual line endings in .env; edit it by hand")
+	}
+	eol := "\n"
+	if strings.Contains(text, "\r\n") {
+		eol = "\r\n"
+	}
+	for _, c := range changes {
+		if !envKeyName.MatchString(c.Key) {
+			return "", errors.New("invalid key name " + strconv.Quote(c.Key))
+		}
+		switch c.Op {
+		case "set":
+			if strings.ContainsAny(c.Value, "\r\n") {
+				return "", errors.New(c.Key + ": value has a line break; use Raw")
+			}
+		case "delete":
+		default:
+			return "", errors.New("unknown change " + strconv.Quote(c.Op))
+		}
+		lines := strings.SplitAfter(text, "\n")
+		if lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		var at []int // 0-based lines assigning the key
+		for _, l := range parseEnv(text) {
+			if l.Key != c.Key {
+				continue
+			}
+			if l.Multiline {
+				return "", errors.New(c.Key + " has a multi-line value; edit it in Raw")
+			}
+			at = append(at, l.Line-1)
+		}
+		switch {
+		case c.Op == "delete":
+			drop := map[int]bool{}
+			for _, i := range at {
+				drop[i] = true
+			}
+			var kept []string
+			for i, l := range lines {
+				if !drop[i] {
+					kept = append(kept, l)
+				}
+			}
+			lines = kept
+		case len(at) > 0:
+			i := at[len(at)-1]
+			lines[i] = rewriteEnvLine(lines[i], c.Value)
+		default:
+			if n := len(lines); n > 0 && !strings.HasSuffix(lines[n-1], "\n") {
+				lines[n-1] += eol
+			}
+			lines = append(lines, c.Key+"="+encodeEnvValue(c.Value, 0)+eol)
+		}
+		text = strings.Join(lines, "")
+	}
+	return text, nil
+}
+
+var envLinePrefix = regexp.MustCompile(`^[ \t]*(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*=[ \t]*`)
+
+// rewriteEnvLine replaces the value of one assignment line (with its EOL),
+// keeping everything around it.
+func rewriteEnvLine(line, value string) string {
+	body := strings.TrimRight(line, "\r\n")
+	eol := line[len(body):]
+	prefix := envLinePrefix.FindString(body)
+	rest := body[len(prefix):]
+	trimmed := strings.TrimRight(rest, " \t")
+	space := rest[len(trimmed):]
+	_, quote, comment, _ := decodeEnvValue(trimmed)
+	tail := comment + space
+	if quote != 0 {
+		tail = trimmed[closingQuote(trimmed)+1:] + space
+	}
+	enc := encodeEnvValue(value, quote)
+	if enc != "" && strings.HasPrefix(tail, "#") {
+		tail = " " + tail
+	}
+	return prefix + enc + tail + eol
+}
+
+// writeEnvKeys sets each key in path in place (see applyEnvChanges), appends
+// missing keys, and writes the result atomically. Every other byte is kept.
+// When that changes the file, the file as it was is first copied to backup
+// (overwriting it, with the file's permission bits); wrote reports whether it
+// changed.
 func writeEnvKeys(path, backup string, kvs []envKV) (wrote bool, err error) {
 	orig, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
-	}
-	if strings.Contains(strings.ReplaceAll(string(orig), "\r\n", ""), "\r") {
-		return false, errors.New("unusual line endings in .env; edit it by hand")
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
 		return false, err
 	}
 	perm := fi.Mode().Perm()
-	eol := "\n"
-	if strings.Contains(string(orig), "\r\n") {
-		eol = "\r\n"
+	changes := make([]envChange, len(kvs))
+	for i, kv := range kvs {
+		changes[i] = envChange{"set", kv.Key, kv.Value}
 	}
-	lines := strings.SplitAfter(string(orig), "\n")
-	if lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	out, err := applyEnvChanges(string(orig), changes)
+	if err != nil {
+		return false, err
 	}
-	for _, kv := range kvs {
-		done := false
-		for i, l := range lines {
-			body := strings.TrimRight(l, "\r\n")
-			if prefix, ok := keyLinePrefix(body, kv.Key); ok {
-				lines[i] = prefix + kv.Value + l[len(body):]
-				done = true
-				break
-			}
-		}
-		if done {
-			continue
-		}
-		if n := len(lines); n > 0 && !strings.HasSuffix(lines[n-1], "\n") {
-			lines[n-1] += eol
-		}
-		lines = append(lines, kv.Key+"="+kv.Value+eol)
-	}
-
-	out := strings.Join(lines, "")
 	if out == string(orig) {
 		return false, nil
 	}

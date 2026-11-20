@@ -67,10 +67,10 @@ const bs = '\x5c' // backslash
 
 // encodeEnvValue writes a value back as text: bare when that reads back the
 // same, else in the preferred quote (a single quote falls back to double
-// when the value holds a '). Only inside double quotes are \ and " escaped;
+// when the value holds a '). Bare also needs no space, #, =, $ or quote. Only inside double quotes are \ and " escaped;
 // $ is left alone so ${VAR} stays an interpolation.
 func encodeEnvValue(value string, prefer byte) string {
-	if prefer == 0 && !strings.ContainsAny(value, " \t#\"'\n\r") {
+	if prefer == 0 && !strings.ContainsAny(value, " \t#=$\"'\n\r") {
 		return value
 	}
 	if prefer == '\'' && !strings.Contains(value, "'") {
