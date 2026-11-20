@@ -125,6 +125,7 @@ type daemon struct {
 	setup      shareSetup            // the dashboard's `laman share setup` run
 	devs       map[string]*devServer // Node dev servers by site host; guarded by mu
 	devRefresh bool                  // a refresh for a dev server change is queued; guarded by mu
+	workers    map[string]*worker    // queue and Reverb workers by kind+"|"+host; guarded by mu
 	quitOnce   sync.Once
 	updates    updater   // laman's own newer release, if any
 	sizes      sizeCache // project folder sizes for the site detail page
@@ -181,6 +182,7 @@ func Run() error {
 	stopAll := func() {
 		cancel() // every service context derives from ctx
 		d.stopAllDev()
+		d.stopAllWorkers()
 		for _, p := range d.pools {
 			p.stop()
 		}
