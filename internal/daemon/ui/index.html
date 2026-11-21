@@ -227,8 +227,19 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .sd-tabs [role="tab"]:focus-visible { outline: 2px solid var(--genting); outline-offset: -4px; border-radius: 8px; }
 .sd-tab-mark { width: 7px; height: 7px; flex: none; transform: rotate(45deg); background: var(--genting); }
 .sd-tab-mark[hidden] { display: none; }
+.sd-tab-badge { font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 7px; border-radius: 999px; color: var(--warn); background: var(--warn-bg); }
+.sd-tab-badge.bad { color: var(--bad); background: var(--bad-bg); }
+.sd-tab-badge[hidden] { display: none; }
+/* Something on this site needs a look: one line above the map */
+.sd-attn { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-bg); color: var(--ink); font-size: 14px; }
+.sd-attn::before { content: ""; width: 7px; height: 7px; flex: none; transform: rotate(45deg); background: var(--warn); }
+.sd-attn span { flex: 1; min-width: 0; }
+.sd-attn a { color: var(--ink); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.sd-attn a:hover { text-decoration: underline; }
+.sd-attn.bad { border-color: var(--bad); background: var(--bad-bg); }
+.sd-attn.bad::before { background: var(--bad); }
 @media (prefers-reduced-motion: reduce) { .sd-tabs [role="tab"], .sd-tabs [role="tab"]::after { transition: none; } }
-.sd-graph { position: relative; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 460px); column-gap: 120px; align-items: center; padding: 8px 0 24px; }
+.sd-graph { position: relative; display: grid; grid-template-columns: minmax(240px, 320px) minmax(360px, 460px); column-gap: 64px; align-items: center; padding: 8px 0 24px; }
 .sd-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .sd-wires path { fill: none; stroke: var(--ok); stroke-opacity: .55; stroke-width: 1.6; }
 .sd-wires path.miss { stroke: var(--off); stroke-opacity: 1; stroke-dasharray: 5 5; }
@@ -252,8 +263,8 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .sd-dot.ok { background: var(--ok); }
 .sd-dot.warn { background: var(--warn); }
 .sd-dev { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.sd-nodes { display: grid; gap: 12px; }
-.sd-node { display: flex; align-items: center; gap: 14px; min-height: 64px; padding: 10px 14px; border-radius: 12px; }
+.sd-nodes { display: grid; gap: 10px; }
+.sd-node { display: flex; align-items: center; gap: 14px; min-height: 54px; padding: 7px 14px; border-radius: 12px; }
 .sd-node.missing { background: transparent; border-style: dashed; }
 .sd-tile { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 9px; border: 1px solid var(--line); background: var(--code); }
 .sd-tile svg { width: 22px; height: 22px; }
@@ -387,7 +398,10 @@ button.env-val:disabled { opacity: 1; cursor: default; }
   .wk-info, .wk-sub { grid-column: 1 / -1; }
   .wk-acts { grid-column: 1 / -1; justify-self: start; }
 }
-@media (max-width: 860px) {
+/* The map stacks when its panel is too narrow for both columns and the wires
+   (not by window width: the rail takes part of the window). */
+.sd-panel { container-type: inline-size; }
+@container (max-width: 680px) {
   .sd-graph { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
   .sd-wires { display: none; }
 }

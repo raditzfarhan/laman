@@ -810,7 +810,7 @@ function renderSiteDetail(installed, shares, qrows) {
     envHash = location.hash;
   }
   const hadFocus = !!document.activeElement?.dataset?.sdtab;
-  const panel = tab === "overview" ? [graph, jobLine] : tab === "workers" ? [workersBlock(s)] : [];
+  const panel = tab === "overview" ? [sdAttention(s, qrows), graph, jobLine] : tab === "workers" ? [workersBlock(s)] : [];
   const parts = [head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), sdTabBar(s, tab),
     ...(tab === "env" ? [] : [el("div", { class: "sd-panel", id: `sd-panel-${tab}`, role: "tabpanel", "aria-labelledby": `sd-tab-${tab}` }, panel)])];
   // The Environment section is moved, never rebuilt: it holds typing and
@@ -842,7 +842,8 @@ function sdTabBar(s, tab) {
   const bar = el("div", { class: "sd-tabs", role: "tablist", "aria-label": `${s.host} sections` },
     tabs.map(([t, label]) => el("button", { type: "button", role: "tab", id: `sd-tab-${t}`, "data-sdtab": t,
       "aria-selected": t === tab ? "true" : "false", "aria-controls": `sd-panel-${t}`, tabindex: t === tab ? "0" : "-1",
-      onclick: () => go(t) }, el("span", { class: "sd-tab-label" }, label), el("span", { class: "sd-tab-mark", hidden: true }))));
+      onclick: () => go(t) }, el("span", { class: "sd-tab-label" }, label), el("span", { class: "sd-tab-mark", hidden: true }),
+      t === "workers" ? el("span", { class: "sd-tab-badge", hidden: true }) : null)));
   bar.onkeydown = (e) => {
     const i = tabs.findIndex(([t]) => t === tab), n = tabs.length;
     const j = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
@@ -866,6 +867,46 @@ function sdTabsSync() {
     envTab.classList.toggle("dirty", dirty);
     envTab.setAttribute("aria-label", dirty ? "Environment, unsaved changes" : "Environment");
   }
+  const wkTab = bar.querySelector('[data-sdtab="workers"]');
+  if (wkTab) {
+    const { crashed, off } = workerAttention(detail?.workers);
+    const badge = wkTab.querySelector(".sd-tab-badge");
+    const text = crashed.length ? "crashed" : off.length ? `${off.length} off` : "";
+    badge.hidden = !text;
+    badge.textContent = text;
+    badge.classList.toggle("bad", crashed.length > 0);
+    const names = crashed.length ? `${crashed.join(" and ")} crashed` : off.length ? `${off.join(" and ")} switched off` : "";
+    badge.title = names;
+    wkTab.setAttribute("aria-label", names ? `Workers, ${names}` : "Workers");
+  }
+}
+
+// Workers that need a look: crashed while on, or off while the site uses them.
+function workerAttention(w) {
+  const crashed = [], off = [];
+  if (!w?.laravel) return { crashed, off };
+  for (const kind of ["queue", "reverb"]) {
+    const x = w[kind];
+    if (!x) continue;
+    if (x.on && x.status?.state === "crashed") crashed.push(WK_NAMES[kind]);
+    else if (!x.on && x.suggest) off.push(WK_NAMES[kind]);
+  }
+  return { crashed, off };
+}
+
+// One line above the map when something is wrong, with a link to the tab that fixes it.
+function sdAttention(s, qrows) {
+  const { crashed, off } = workerAttention(detail.workers);
+  const failed = qrows.reduce((n, q) => n + (q.failed || 0), 0);
+  const queueOff = off.includes(WK_NAMES.queue);
+  const text = crashed.length ? `${crashed.join(" and ")} crashed`
+    : queueOff && failed > 0 ? `Queue worker is off: ${failed} failed job${failed === 1 ? "" : "s"}`
+    : queueOff ? "This site queues jobs but no worker is running"
+    : off.length ? "Reverb is installed but not running"
+    : "";
+  if (!text) return null;
+  return el("p", { class: "sd-attn" + (crashed.length ? " bad" : ""), role: "status" },
+    el("span", {}, text), el("a", { href: siteHash(s.host, "workers") }, "Workers →"));
 }
 
 // The curves from the dot on the site card to each service card.
