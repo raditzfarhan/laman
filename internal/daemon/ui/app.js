@@ -201,7 +201,7 @@ function draw(force) {
     // Only what the Queue card shows: running jobs come and go every poll.
     const qn = (k) => qrows.reduce((n, q) => n + (q[k] || 0), 0);
     const qsum = [qn("waiting") + qn("delayed"), qn("failed")];
-    if (changed("site", [host, detailShape(detail), detailErr, wkBusy, [...wkOpen], status.sites.find((x) => x.host === host), status.php, installed, shares, opening, copied, shareOpts,
+    if (changed("site", [host, parseSiteHash(location.hash).tab, detailShape(detail), detailErr, wkBusy, [...wkOpen], status.sites.find((x) => x.host === host), status.php, installed, shares, opening, copied, shareOpts,
       status.shareDomain, status.editor, devShape.find((x) => x.host === host), devBusy[host], qsum, vers?.job, status.mailUrl, status.httpsTrusted, status.httpsPort, status.httpPort]))
       renderSiteDetail(installed, shares, qrows);
     // Worker uptimes and logs change every poll: updated in place.
@@ -611,11 +611,24 @@ async function loadDevOut() {
 let detail = null;       // GET /api/sites/detail for siteHost()
 let detailErr = "";      // why it couldn't be read (e.g. the site is gone)
 let detailTimer = 0;
-const siteHash = (host) => `#site/${encodeURIComponent(host)}`;
-const siteHost = () => {
-  if (!location.hash.startsWith("#site/")) return "";
-  try { return decodeURIComponent(location.hash.slice(6)); } catch { return ""; } // a mistyped link, e.g. #site/50%
-};
+// The page has tabs: #site/<host> is Overview, #site/<host>/env and
+// #site/<host>/workers the others. The host is encoded, so it has no "/".
+const siteHash = (host, tab = "") => `#site/${encodeURIComponent(host)}${tab ? `/${tab}` : ""}`;
+function parseSiteHash(hash) {
+  if (!hash.startsWith("#site/")) return { host: "", tab: "" };
+  const rest = hash.slice(6), cut = rest.indexOf("/");
+  const tab = cut < 0 ? "" : rest.slice(cut + 1);
+  try { return { host: decodeURIComponent(cut < 0 ? rest : rest.slice(0, cut)), tab }; } catch { return { host: "", tab }; } // a mistyped link, e.g. #site/50%
+}
+const siteHost = () => parseSiteHash(location.hash).host;
+const SD_TABS = [["overview", "Overview"], ["env", "Environment"], ["workers", "Workers"]];
+// The tabs this site has: no Environment for laman's apps, Workers only for Laravel.
+const siteTabs = (s) => SD_TABS.filter(([t]) => t === "overview" || (t === "env" ? !s.app : !!detail?.workers?.laravel));
+// The open tab; one this site doesn't have (or a mistyped one) is Overview.
+function siteTab(s) {
+  const t = parseSiteHash(location.hash).tab;
+  return siteTabs(s).some(([k]) => k === t) ? t : "overview";
+}
 let siteJobHost = ""; // site whose Install button started the current job
 
 async function loadDetail() {
@@ -629,7 +642,7 @@ async function loadDetail() {
     detail = d;
     detailErr = "";
     if (d.facts.queue) loadQueues(); // renders itself
-    loadWorkerLogs(host); // in the background: a slow log never holds up the page
+    if (parseSiteHash(location.hash).tab === "workers") loadWorkerLogs(host); // in the background: a slow log never holds up the page
   } catch (e) {
     if (host !== siteHost()) return;
     detail = null;
@@ -791,18 +804,68 @@ function renderSiteDetail(installed, shares, qrows) {
   const job = vers?.job || {};
   const ours = siteJobHost === s.host || (job.running && (job.message || "").includes(` for ${s.host}`));
   const jobLine = el("p", { class: "job" + (ours && job.error ? " err" : ""), role: "status" }, ours ? jobText("site", job) : "");
-  const parts = [head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), graph, jobLine, ...[workersBlock(s)].filter(Boolean)];
+  const tab = siteTab(s);
+  if (parseSiteHash(location.hash).tab !== (tab === "overview" ? "" : tab)) {
+    history.replaceState(null, "", siteHash(s.host)); // a tab this site doesn't have
+    envHash = location.hash;
+  }
+  const hadFocus = !!document.activeElement?.dataset?.sdtab;
+  const panel = tab === "overview" ? [graph, jobLine] : tab === "workers" ? [workersBlock(s)] : [];
+  const parts = [head, ...(sh || opening[s.host] || shareOpts === s.host ? [shareBlock(s, sh)] : []), sdTabBar(s, tab),
+    ...(tab === "env" ? [] : [el("div", { class: "sd-panel", id: `sd-panel-${tab}`, role: "tabpanel", "aria-labelledby": `sd-tab-${tab}` }, panel)])];
   // The Environment section is moved, never rebuilt: it holds typing and
-  // pending edits, and taking it out of the page would drop its focus.
-  const env = envFor(s);
+  // pending edits, and taking it out of the page would drop its focus. It is
+  // made the first time its tab opens, then only hidden while another is.
+  const env = tab === "env" ? envFor(s) : envState[s.host] || null;
   for (const c of [...box.children]) if (c !== env?.node) c.remove();
   if (env) {
     if (env.node.parentNode !== box) box.append(env.node);
+    env.node.hidden = tab !== "env";
+    env.node.id = "sd-panel-env"; // the Environment tab's panel
+    env.node.setAttribute("role", "tabpanel");
     env.node.before(...parts);
   } else box.append(...parts);
+  if (hadFocus) box.querySelector('[data-sdtab][aria-selected="true"]')?.focus();
+  sdTabsSync();
   wireObs.disconnect();
-  wireObs.observe(graph);
-  drawWires();
+  if (tab === "overview") {
+    wireObs.observe(graph);
+    drawWires();
+  }
+}
+
+// The tab bar under the page's header. Buttons change the hash, so Back and
+// Forward move between tabs and a link opens one.
+function sdTabBar(s, tab) {
+  const tabs = siteTabs(s);
+  const go = (t) => { location.hash = siteHash(s.host, t === "overview" ? "" : t); };
+  const bar = el("div", { class: "sd-tabs", role: "tablist", "aria-label": `${s.host} sections` },
+    tabs.map(([t, label]) => el("button", { type: "button", role: "tab", id: `sd-tab-${t}`, "data-sdtab": t,
+      "aria-selected": t === tab ? "true" : "false", "aria-controls": `sd-panel-${t}`, tabindex: t === tab ? "0" : "-1",
+      onclick: () => go(t) }, el("span", { class: "sd-tab-label" }, label), el("span", { class: "sd-tab-mark", hidden: true }))));
+  bar.onkeydown = (e) => {
+    const i = tabs.findIndex(([t]) => t === tab), n = tabs.length;
+    const j = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
+    if (j === undefined) return;
+    e.preventDefault();
+    if (j !== i) go(tabs[j][0]);
+  };
+  return bar;
+}
+
+// The marks on the tabs, updated in place: the Environment section redraws
+// itself without the rest of the page.
+function sdTabsSync() {
+  const bar = document.querySelector(".sd-tabs");
+  if (!bar) return;
+  const host = siteHost();
+  const envTab = bar.querySelector('[data-sdtab="env"]');
+  if (envTab) {
+    const dirty = envDirty(envState[host]);
+    envTab.querySelector(".sd-tab-mark").hidden = !dirty;
+    envTab.classList.toggle("dirty", dirty);
+    envTab.setAttribute("aria-label", dirty ? "Environment, unsaved changes" : "Environment");
+  }
 }
 
 // The curves from the dot on the site card to each service card.
@@ -1102,8 +1165,9 @@ function envDraw(host) {
   const rawScroll = node.querySelector(".env-raw");
   const scroll = rawScroll ? [rawScroll.scrollTop, rawScroll.scrollLeft] : null;
   node.replaceChildren(...envBody(st));
-  node.hidden = !node.firstChild;
+  node.hidden = siteHost() !== host || parseSiteHash(location.hash).tab !== "env"; // only on its own tab
   envBarDraw(st, true);
+  sdTabsSync();
   envFilter(st);
   const ta = node.querySelector(".env-raw");
   if (ta && scroll) [ta.scrollTop, ta.scrollLeft] = scroll;
@@ -1122,8 +1186,10 @@ function envDraw(host) {
 
 function envBody(st) {
   const d = st.data;
-  if (st.gone || (d && !d.exists && !d.exampleExists)) return [];
+  if (st.gone) return [];
   const title = el("h2", { id: "env-title" }, "Environment");
+  if (d && !d.exists && !d.exampleExists) return [el("div", { class: "sect-head env-head" }, title),
+    el("div", { class: "panel env-msg" }, el("span", { class: "muted" }, "This project has no .env or .env.example file."))];
   if (!d) return [el("div", { class: "sect-head env-head" }, title),
     el("div", { class: "panel env-msg" }, st.err ? el("span", { class: "err" }, `Couldn't read .env: ${st.err}`) : el("span", { class: "muted" }, "Loading…"))];
   if (d.tooBig) return [el("div", { class: "sect-head env-head" }, title),
@@ -1380,6 +1446,12 @@ function envBarDraw(st, force) {
 function envAsk(st, ask) {
   st.ask = ask;
   st.focus = "ask-no";
+  if (parseSiteHash(location.hash).tab !== "env") {
+    // Asked from another tab: the question is in the Environment tab's bar.
+    history.replaceState(null, "", siteHash(st.host, "env"));
+    envHash = location.hash;
+    render();
+  }
   envDraw(st.host);
   st.bar?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
@@ -1648,10 +1720,8 @@ function envDrop(host) {
   delete envState[host];
   delete drawn.site;
 }
-const envHostOf = (hash) => {
-  if (!hash.startsWith("#site/")) return "";
-  try { return decodeURIComponent(hash.slice(6)); } catch { return ""; }
-};
+// A tab change on the same site is not leaving it.
+const envHostOf = (hash) => parseSiteHash(hash).host;
 function envGuard() {
   const prev = envHash, now = location.hash;
   if (prev === now) return false;

@@ -216,6 +216,18 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .sd-tools .btn.primary { display: inline-flex; align-items: center; gap: 7px; text-decoration: none; padding: 6px 14px; font-weight: 600; }
 .sd-tools .btn.primary svg { width: 16px; height: 16px; }
 .sd .shared { margin: 0 0 18px; }
+/* Tabs under the header: Overview, Environment, Workers */
+.sd-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; margin: 0 0 20px; border-bottom: 1px solid var(--line); background: var(--bg); overflow-x: auto; scrollbar-width: none; }
+.sd-tabs::-webkit-scrollbar { display: none; }
+.sd-tabs [role="tab"] { position: relative; flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 12px 12px 11px; border: 0; border-radius: 0; background: none; color: var(--muted); font-weight: 600; font-size: 14px; white-space: nowrap; cursor: pointer; transition: color 160ms var(--ease); }
+.sd-tabs [role="tab"]:hover { color: var(--ink); }
+.sd-tabs [role="tab"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--genting); transform: scaleX(0); transition: transform 200ms var(--ease); }
+.sd-tabs [role="tab"][aria-selected="true"] { color: var(--ink); }
+.sd-tabs [role="tab"][aria-selected="true"]::after { transform: scaleX(1); }
+.sd-tabs [role="tab"]:focus-visible { outline: 2px solid var(--genting); outline-offset: -4px; border-radius: 8px; }
+.sd-tab-mark { width: 7px; height: 7px; flex: none; transform: rotate(45deg); background: var(--genting); }
+.sd-tab-mark[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .sd-tabs [role="tab"], .sd-tabs [role="tab"]::after { transition: none; } }
 .sd-graph { position: relative; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 460px); column-gap: 120px; align-items: center; padding: 8px 0 24px; }
 .sd-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .sd-wires path { fill: none; stroke: var(--ok); stroke-opacity: .55; stroke-width: 1.6; }
