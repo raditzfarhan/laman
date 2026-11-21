@@ -332,7 +332,7 @@ function workerMarks(host) {
   const list = workersOf(host);
   if (!list.length) return null;
   return el("span", { class: "wkmarks" }, list.map((w) =>
-    el("a", { class: `wkmark devstate ${wkClass(w.state)}`, href: siteHash(host),
+    el("a", { class: `wkmark devstate ${wkClass(w.state)}`, href: siteHash(host, "workers"),
       title: `${w.kind === "queue" ? "Queue worker" : "Reverb"}: ${w.state}` }, w.kind)));
 }
 
@@ -623,7 +623,7 @@ function parseSiteHash(hash) {
 const siteHost = () => parseSiteHash(location.hash).host;
 const SD_TABS = [["overview", "Overview"], ["env", "Environment"], ["workers", "Workers"]];
 // The tabs this site has: no Environment for laman's apps, Workers only for Laravel.
-const siteTabs = (s) => SD_TABS.filter(([t]) => t === "overview" || (t === "env" ? !s.app : !!detail?.workers?.laravel));
+const siteTabs = (s) => SD_TABS.filter(([t]) => t === "overview" || (t === "env" ? !s.app && !!s.path : !!detail?.workers?.laravel));
 // The open tab; one this site doesn't have (or a mistyped one) is Overview.
 function siteTab(s) {
   const t = parseSiteHash(location.hash).tab;
@@ -894,6 +894,9 @@ function workerAttention(w) {
   return { crashed, off };
 }
 
+// Reverb runs but the site's .env sends its clients somewhere else (the Workers row offers Set up .env).
+const reverbEnvOff = (w) => !!(w?.laravel && w.reverb?.on && w.reverb.url && !w.reverb.envOK && !w.reverb.needsInstall);
+
 // One line above the map when something is wrong, with a link to the tab that fixes it.
 function sdAttention(s, qrows) {
   const { crashed, off } = workerAttention(detail.workers);
@@ -903,6 +906,7 @@ function sdAttention(s, qrows) {
     : queueOff && failed > 0 ? `Queue worker is off: ${failed} failed job${failed === 1 ? "" : "s"}`
     : queueOff ? "This site queues jobs but no worker is running"
     : off.length ? "Reverb is installed but not running"
+    : reverbEnvOff(detail.workers) ? "Reverb is running, but the site's .env points elsewhere"
     : "";
   if (!text) return null;
   return el("p", { class: "sd-attn" + (crashed.length ? " bad" : ""), role: "status" },
@@ -1460,6 +1464,7 @@ function envBarDraw(st, force) {
   const key = JSON.stringify([n, raw, st.ask, st.busy]);
   if (!force && key === st.barKey) return;
   st.barKey = key;
+  sdTabsSync(); // the tab's unsaved mark follows the bar
   const had = document.activeElement, f = had && bar.contains(had) ? had.dataset.f : "";
   const busy = !!st.busy;
   if (st.ask) {
@@ -2020,7 +2025,7 @@ function queueRow(q) {
       el("span", { class: "qsite" }, q.site ? el("a", { href: siteURL(q.site), target: "_blank", rel: "noopener" }, bare(q.site)) : qsite(q),
         qPerSite.get(qsite(q)) > 1 ? el("span", { class: "qn" }, ` · ${q.name}`) : null),
       el("span", { class: "qname" }, `${q.driver === "redis" ? "redis" : `database · ${q.conn}`} · queue ${q.name}`),
-      q.noWorker && q.site ? el("a", { class: "noworker", href: siteHash(q.site), title: `Switch on ${q.site}'s queue worker on its page` }, "No worker running →") : null),
+      q.noWorker && q.site ? el("a", { class: "noworker", href: siteHash(q.site, "workers"), title: `Switch on ${q.site}'s queue worker on its page` }, "No worker running →") : null),
     el("div", { class: "counts" }, stat(q.waiting, "waiting"), stat(q.delayed, "delayed"), stat(q.reserved, "running"), stat(q.failed, "failed", true)),
     el("div", { class: "acts" },
       el("button", { "aria-expanded": open ? "true" : "false", onclick: () => toggleQueue(q) }, open ? "Hide jobs" : "Show jobs"),

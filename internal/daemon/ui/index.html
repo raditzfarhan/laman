@@ -217,11 +217,11 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .sd-tools .btn.primary svg { width: 16px; height: 16px; }
 .sd .shared { margin: 0 0 18px; }
 /* Tabs under the header: Overview, Environment, Workers */
-.sd-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; margin: 0 0 20px; border-bottom: 1px solid var(--line); background: var(--bg); overflow-x: auto; scrollbar-width: none; }
+.sd-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; margin: 0 0 20px; box-shadow: inset 0 -1px var(--line); background: var(--bg); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .sd-tabs::-webkit-scrollbar { display: none; }
 .sd-tabs [role="tab"] { position: relative; flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 12px 12px 11px; border: 0; border-radius: 0; background: none; color: var(--muted); font-weight: 600; font-size: 14px; white-space: nowrap; cursor: pointer; transition: color 160ms var(--ease); }
 .sd-tabs [role="tab"]:hover { color: var(--ink); }
-.sd-tabs [role="tab"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--genting); transform: scaleX(0); transition: transform 200ms var(--ease); }
+.sd-tabs [role="tab"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 2px 2px 0 0; background: var(--genting); transform: scaleX(0); transition: transform 200ms var(--ease); }
 .sd-tabs [role="tab"][aria-selected="true"] { color: var(--ink); }
 .sd-tabs [role="tab"][aria-selected="true"]::after { transform: scaleX(1); }
 .sd-tabs [role="tab"]:focus-visible { outline: 2px solid var(--genting); outline-offset: -4px; border-radius: 8px; }
@@ -282,6 +282,7 @@ body:not(.down) .hero.live .cursor { animation: blink 1.06s steps(1) infinite; }
 .sd-gone { padding: 40px 0; display: grid; gap: 10px; justify-items: start; }
 /* Workers: one row per worker (name, switch, state, what it runs, actions) */
 .sd-workers { margin-top: 14px; }
+.sd-panel > .sd-workers { margin-top: 0; } /* right under the tabs, like the other panels */
 .wk { display: grid; grid-template-columns: 160px auto minmax(0, 1fr) auto; align-items: center; gap: 8px 18px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .wk:last-child { border-bottom: 0; }
 .wk-name { display: grid; font-weight: 650; }
