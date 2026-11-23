@@ -391,3 +391,39 @@ func TestDBZuperInstallLeavesNoStagingDB(t *testing.T) {
 		}
 	}
 }
+
+func TestDBZuperWorkers(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "config"), 0o755)
+	os.WriteFile(filepath.Join(dir, "config", "queue.php"),
+		[]byte("<?php\nreturn [\n'connections' => [\n\n'transfers' => [\n 'driver' => 'database',\n],\n"), 0o644)
+	got := dbzuperApp.Workers(dir)
+	want := AppWorkers{
+		Before: [][]string{{"dbzuper:transfers:recover"}},
+		Run: []AppWorker{
+			{Name: "transfers", Args: []string{"queue:work", "transfers", "--queue=transfers", "--sleep=1", "--tries=1", "--timeout=0"}},
+			{Name: "default", Args: []string{"queue:work", "database", "--queue=default", "--sleep=3", "--tries=3"}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Workers = %+v, want %+v", got, want)
+	}
+}
+
+func TestDBZuperWorkersOldRelease(t *testing.T) {
+	dir := t.TempDir()
+	if got := dbzuperApp.Workers(dir); !reflect.DeepEqual(got, AppWorkers{}) {
+		t.Fatalf("no config/queue.php: Workers = %+v, want zero", got)
+	}
+	os.MkdirAll(filepath.Join(dir, "config"), 0o755)
+	os.WriteFile(filepath.Join(dir, "config", "queue.php"), []byte("<?php\nreturn ['connections' => ['database' => []]];\n"), 0o644)
+	if got := dbzuperApp.Workers(dir); !reflect.DeepEqual(got, AppWorkers{}) {
+		t.Fatalf("queue.php without transfers: Workers = %+v, want zero", got)
+	}
+}
+
+func TestAppWorkersNone(t *testing.T) {
+	if got := adminerApp.Workers(t.TempDir()); !reflect.DeepEqual(got, AppWorkers{}) {
+		t.Fatalf("adminer Workers = %+v, want zero", got)
+	}
+}

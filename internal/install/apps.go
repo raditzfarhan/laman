@@ -38,6 +38,30 @@ type AppSpec struct {
 	// before the swap, on updates only (a migration that needs the old
 	// data). If it fails the update is abandoned and the old install stays.
 	prepare func(dir string, c *AppCtx) error
+	// workers says which queue workers the installed app in dir needs. Nil
+	// for apps that have none.
+	workers func(dir string) AppWorkers
+}
+
+// AppWorker is one long-running artisan queue worker an app needs.
+type AppWorker struct {
+	Name string   // "transfers": the worker kind is "app-"+Name
+	Args []string // artisan arguments
+}
+
+// AppWorkers is what an installed app needs to run its background work.
+type AppWorkers struct {
+	Before [][]string // artisan commands run once before the workers start
+	Run    []AppWorker
+}
+
+// Workers returns the workers the app installed in dir needs, or the zero
+// value when it needs none.
+func (s *AppSpec) Workers(dir string) AppWorkers {
+	if s.workers == nil {
+		return AppWorkers{}
+	}
+	return s.workers(dir)
 }
 
 // AppCtx is what a recipe needs from laman.
@@ -415,7 +439,25 @@ var dbzuperApp = &AppSpec{
 		os.Remove(filepath.Join(dir, "public", "hot"))
 		return nil
 	},
-	done: dbzuperDone,
+	done:    dbzuperDone,
+	workers: dbzuperWorkers,
+}
+
+// dbzuperWorkers lists DBZuper's queue workers, as its docs/self-hosting.md
+// runs them. The transfers worker is declared only when the install's queue
+// config defines a transfers queue; otherwise the app gets no workers.
+func dbzuperWorkers(dir string) AppWorkers {
+	conf, err := os.ReadFile(filepath.Join(dir, "config", "queue.php"))
+	if err != nil || !strings.Contains(string(conf), "'transfers'") {
+		return AppWorkers{}
+	}
+	return AppWorkers{
+		Before: [][]string{{"dbzuper:transfers:recover"}},
+		Run: []AppWorker{
+			{Name: "transfers", Args: []string{"queue:work", "transfers", "--queue=transfers", "--sleep=1", "--tries=1", "--timeout=0"}},
+			{Name: "default", Args: []string{"queue:work", "database", "--queue=default", "--sleep=3", "--tries=3"}},
+		},
+	}
 }
 
 // dbzuperEnv is what laman keeps set in DBZuper's .env, on install and on
