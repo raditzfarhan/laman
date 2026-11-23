@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,22 +202,31 @@ func installApp(name string, update bool, from string) error {
 // there are no workers, so both do nothing.
 func appWorkerHooks(name string) (stop func() error, start func()) {
 	spec := install.AppByName(name)
-	ask := func(action string) error {
-		// A stop can wait about 10s for workers to exit, as long as Do's own limit.
-		_, err := client.DoWithin(30*time.Second, "POST", "/api/apps/workers", map[string]string{"name": name, "action": action})
+	ask := func(action string, wait time.Duration) error {
+		_, err := client.DoWithin(wait, "POST", "/api/apps/workers", map[string]string{"name": name, "action": action})
 		return err
 	}
 	stop = func() error {
 		if !client.Running() {
 			return nil
 		}
-		return ask("stop")
+		// Stopping waits up to 10s for a start in flight, then up to 10s per
+		// worker, one after the other; 60s leaves margin over that.
+		return ask("stop", 60*time.Second)
 	}
 	start = func() {
 		if !client.Running() {
 			return
 		}
-		if err := ask("start"); err != nil {
+		// Releasing can run the app's recovery command first (up to 2 minutes).
+		err := ask("start", 150*time.Second)
+		var ne net.Error
+		switch {
+		case err == nil:
+		case errors.As(err, &ne) && ne.Timeout():
+			// The daemon has already cleared the hold and carries on without us.
+			fmt.Printf("%s's workers are still starting in the background\n", spec.Title)
+		default:
 			fmt.Printf("Could not restart %s's workers: %v\n", spec.Title, err)
 		}
 	}
@@ -243,10 +253,13 @@ func removeApp(name string, yes bool) error {
 	}
 	// Its workers hold files open; stop them and keep them stopped.
 	stop, start := appWorkerHooks(name)
+	// Before stop: the daemon sets the hold first, so even a failed stop
+	// must be released. The app is gone from the config by then, so it only
+	// clears the hold and starts nothing.
+	defer start()
 	if err := stop(); err != nil {
 		return err
 	}
-	defer start() // releases the hold; the app is gone from the config, so nothing starts
 	delete(cfg.Apps, name)
 	delete(cfg.Isolated, name)
 	if cfg.DBClient == name {
