@@ -353,9 +353,9 @@ var dbzuperApp = &AppSpec{
 	Source: "github.com/dbzuper/dbzuper",
 	PHP:    ">=8.4",
 	latest: func() (string, error) { return githubLatest("dbzuper/dbzuper") },
-	// Its own database (accounts, saved connections, history) and uploads.
-	// The -wal and -shm files hold writes not yet merged into the main file.
-	keep:    []string{".env", "database/database.sqlite", "database/database.sqlite-wal", "database/database.sqlite-shm", "storage/app"},
+	// Its settings and uploads. Its own database (accounts, saved
+	// connections, history) is not carried as files: prepare snapshots it.
+	keep:    []string{".env", "storage/app"},
 	prepare: dbzuperPrepare,
 	install: func(dir, version string, c *AppCtx) error {
 		if c.From != "" {
@@ -497,8 +497,9 @@ var sqliteSnapshot = func(php, from, to string) error {
 
 // dbzuperPrecheck runs the migrations on a copy of the old database, so a
 // migration that cannot work fails the update before anything is replaced.
-// It is an early check on a copy: the real database arrives by keep and is
-// migrated by prepare, so the copy and its sidecar files are removed.
+// It is an early check on a copy: prepare takes a fresh snapshot just
+// before the swap and migrates that, so this copy and its sidecar files are
+// removed.
 func dbzuperPrecheck(dir string, c *AppCtx) error {
 	db := filepath.Join(dir, "database", "database.sqlite")
 	if err := sqliteSnapshot(c.PHP, filepath.Join(c.Old, "database", "database.sqlite"), db); err != nil {
@@ -512,8 +513,23 @@ func dbzuperPrecheck(dir string, c *AppCtx) error {
 }
 
 // dbzuperPrepare runs in the staged copy once the kept data is in place:
-// laman's .env values, then the migrations on the database it will use.
+// a snapshot of the live database, laman's .env values, then the migrations
+// on the database it will use. The old DBZuper is still served while this
+// runs, so its database is never copied file by file: a checkpoint between
+// copying the main file and its -wal would leave a mismatched set. VACUUM
+// INTO reads it as one consistent database, unmerged writes included.
 func dbzuperPrepare(dir string, c *AppCtx) error {
+	if old := filepath.Join(c.Old, "database", "database.sqlite"); c.Old != "" && exists(old) {
+		db := filepath.Join(dir, "database", "database.sqlite")
+		for _, f := range []string{db, db + "-wal", db + "-shm"} {
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+		if err := sqliteSnapshot(c.PHP, old, db); err != nil {
+			return err
+		}
+	}
 	if err := setEnv(filepath.Join(dir, ".env"), dbzuperEnv(c)); err != nil {
 		return err
 	}

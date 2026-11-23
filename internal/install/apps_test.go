@@ -330,15 +330,49 @@ func stubArtisan(t *testing.T, fn func(dir string, args []string) error) {
 	runArtisan = func(c *AppCtx, dir string, args ...string) error { return fn(dir, args) }
 }
 
+func stubSnapshot(t *testing.T, fn func(from, to string) error) {
+	t.Helper()
+	old := sqliteSnapshot
+	t.Cleanup(func() { sqliteSnapshot = old })
+	sqliteSnapshot = func(php, from, to string) error { return fn(from, to) }
+}
+
 func TestDBZuperPrepare(t *testing.T) {
-	dir := t.TempDir()
+	dir, old := t.TempDir(), t.TempDir()
 	env := filepath.Join(dir, ".env")
 	os.WriteFile(env, []byte("APP_URL=http://old\r\nDB_JOURNAL_MODE=\r\nCUSTOM=1\r\n"), 0o644)
+	os.MkdirAll(filepath.Join(old, "database"), 0o755)
+	os.WriteFile(filepath.Join(old, "database", "database.sqlite"), []byte("live"), 0o644)
+	// Staging's own database files must not pair with the snapshot.
+	os.MkdirAll(filepath.Join(dir, "database"), 0o755)
+	for _, f := range []string{"database.sqlite", "database.sqlite-wal", "database.sqlite-shm"} {
+		os.WriteFile(filepath.Join(dir, "database", f), []byte("staging"), 0o644)
+	}
+	var calls []string
+	stubSnapshot(t, func(from, to string) error {
+		calls = append(calls, "snapshot")
+		if from != filepath.Join(old, "database", "database.sqlite") || to != filepath.Join(dir, "database", "database.sqlite") {
+			t.Errorf("snapshot %s -> %s", from, to)
+		}
+		for _, f := range []string{to, to + "-wal", to + "-shm"} {
+			if exists(f) {
+				t.Errorf("staging's %s still there at snapshot time", filepath.Base(f))
+			}
+		}
+		return os.WriteFile(to, []byte("snap"), 0o644)
+	})
 	var gotDir string
 	var gotArgs []string
-	stubArtisan(t, func(d string, args []string) error { gotDir, gotArgs = d, args; return nil })
-	if err := dbzuperPrepare(dir, &AppCtx{URL: "https://dbzuper.test"}); err != nil {
+	stubArtisan(t, func(d string, args []string) error {
+		calls = append(calls, "artisan")
+		gotDir, gotArgs = d, args
+		return nil
+	})
+	if err := dbzuperPrepare(dir, &AppCtx{URL: "https://dbzuper.test", Old: old}); err != nil {
 		t.Fatal(err)
+	}
+	if strings.Join(calls, " ") != "snapshot artisan" {
+		t.Errorf("calls = %v, want the snapshot before migrate", calls)
 	}
 	b, _ := os.ReadFile(env)
 	for _, want := range []string{"APP_URL=https://dbzuper.test\n", "DB_JOURNAL_MODE=WAL\n", "DB_TRANSACTION_MODE=IMMEDIATE\n", "DB_BUSY_TIMEOUT=5000\n", "CUSTOM=1"} {
@@ -351,8 +385,32 @@ func TestDBZuperPrepare(t *testing.T) {
 	}
 	boom := errors.New("boom")
 	stubArtisan(t, func(string, []string) error { return boom })
-	if err := dbzuperPrepare(dir, &AppCtx{URL: "u"}); !errors.Is(err, boom) {
+	if err := dbzuperPrepare(dir, &AppCtx{URL: "u", Old: old}); !errors.Is(err, boom) {
 		t.Errorf("err = %v", err)
+	}
+	stubArtisan(t, func(string, []string) error { t.Error("migrate after a failed snapshot"); return nil })
+	stubSnapshot(t, func(string, string) error { return boom })
+	if err := dbzuperPrepare(dir, &AppCtx{URL: "u", Old: old}); !errors.Is(err, boom) {
+		t.Errorf("snapshot failure: err = %v", err)
+	}
+}
+
+func TestDBZuperPrepareNoOldDB(t *testing.T) {
+	dir, old := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("APP_URL=x\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "database"), 0o755)
+	os.WriteFile(filepath.Join(dir, "database", "database.sqlite"), []byte("staging"), 0o644)
+	stubSnapshot(t, func(string, string) error { t.Error("snapshot without an old database"); return nil })
+	ran := false
+	stubArtisan(t, func(string, []string) error { ran = true; return nil })
+	if err := dbzuperPrepare(dir, &AppCtx{URL: "u", Old: old}); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Error("migrate did not run")
+	}
+	if got := readFile(t, filepath.Join(dir, "database", "database.sqlite")); got != "staging" {
+		t.Errorf("database.sqlite = %q", got)
 	}
 }
 
@@ -360,7 +418,7 @@ func TestDBZuperSpecWiring(t *testing.T) {
 	if dbzuperApp.prepare == nil {
 		t.Error("prepare not set")
 	}
-	want := []string{".env", "database/database.sqlite", "database/database.sqlite-wal", "database/database.sqlite-shm", "storage/app"}
+	want := []string{".env", "storage/app"}
 	if !reflect.DeepEqual(dbzuperApp.keep, want) {
 		t.Errorf("keep = %v", dbzuperApp.keep)
 	}
