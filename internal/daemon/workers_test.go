@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"laman/internal/config"
+	"laman/internal/install"
 	"laman/internal/redisq"
 	"laman/internal/sites"
 
@@ -1087,5 +1088,304 @@ func TestStatusListsWorkers(t *testing.T) {
 	b, _ = json.Marshal(f.d.status())
 	if !strings.Contains(string(b), `"workers":[]`) {
 		t.Errorf("status JSON with none on: %s", b)
+	}
+}
+
+// appFix: a daemon with DBZuper installed (its own site and the db alias),
+// no other site, and appBeforeCommand replaced by a recorder.
+type appFix struct {
+	*workerFixture
+	app string // the app's folder
+
+	bmu      sync.Mutex
+	before   [][]string
+	beforeAt []int         // f.count() when each before command ran
+	block    chan struct{} // when set, before commands wait for it
+	entered  chan struct{} // gets a value as each before command starts
+}
+
+const appQueueConf = "<?php\nreturn ['connections' => ['database' => [], 'transfers' => []]];\n"
+
+func appFixture(t *testing.T, cmd func() *exec.Cmd) *appFix {
+	t.Helper()
+	f := &appFix{workerFixture: newWorkerFixture(t, "", cmd), app: t.TempDir(), entered: make(chan struct{}, 10)}
+	os.WriteFile(filepath.Join(f.app, "artisan"), []byte("<?php\n"), 0o644)
+	os.MkdirAll(filepath.Join(f.app, "config"), 0o755)
+	os.WriteFile(filepath.Join(f.app, "config", "queue.php"), []byte(appQueueConf), 0o644)
+	f.d.cfg.QueueWorkers, f.d.cfg.Reverb = map[string]bool{}, map[string]bool{}
+	f.d.cfg.Apps = map[string]string{"dbzuper": "1.0"}
+	setSites(f.d, f.appSites()...)
+
+	old := appBeforeCommand
+	t.Cleanup(func() { appBeforeCommand = old })
+	appBeforeCommand = func(phpExe, dir string, args []string) error {
+		f.bmu.Lock()
+		f.before = append(f.before, append([]string{}, args...))
+		f.beforeAt = append(f.beforeAt, f.count())
+		block := f.block
+		f.bmu.Unlock()
+		f.entered <- struct{}{}
+		if block != nil {
+			<-block
+		}
+		return nil
+	}
+	return f
+}
+
+func (f *appFix) appSites() []sites.Site {
+	return []sites.Site{
+		{Name: "dbzuper", Host: "dbzuper.test", App: "dbzuper", Path: f.app},
+		{Name: "db", Host: "db.test", App: "dbzuper", Path: f.app},
+	}
+}
+
+func (f *appFix) befores() [][]string {
+	f.bmu.Lock()
+	defer f.bmu.Unlock()
+	return append([][]string{}, f.before...)
+}
+
+func (f *appFix) appState(kind string) string {
+	return f.d.workerState(kind, "dbzuper.test").State
+}
+
+func (f *appFix) bothRunning(t *testing.T) bool {
+	t.Helper()
+	return eventually(t, 5*time.Second, func() bool {
+		return f.appState("app-transfers") == workerRunning && f.appState("app-default") == workerRunning
+	})
+}
+
+var recoverCmd = [][]string{{"dbzuper:transfers:recover"}}
+
+func pingCmd() *exec.Cmd { return shellCmd("ping -n 30 127.0.0.1 >nul") }
+
+func TestAppWorkersStartWithLaman(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	f.d.startAutoWorkers()
+	if !f.bothRunning(t) {
+		t.Fatalf("transfers %q, default %q, want both running", f.appState("app-transfers"), f.appState("app-default"))
+	}
+	f.d.mu.Lock()
+	for key := range f.d.workers {
+		if strings.HasSuffix(key, "|db.test") {
+			t.Errorf("a worker on the alias: %s", key)
+		}
+	}
+	f.d.mu.Unlock()
+	if got := f.befores(); !reflect.DeepEqual(got, recoverCmd) {
+		t.Errorf("before commands = %v, want %v", got, recoverCmd)
+	}
+	f.bmu.Lock()
+	if len(f.beforeAt) == 0 || f.beforeAt[0] != 0 {
+		t.Errorf("before ran after %v worker starts, want before any", f.beforeAt)
+	}
+	f.bmu.Unlock()
+	if _, err := os.Stat(filepath.Join(config.LogDir(), "app-transfers-dbzuper.log")); err != nil {
+		t.Errorf("log file: %v", err)
+	}
+}
+
+func TestAppWorkersBeforeRunsOncePerStart(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	workerBackoff = func(int) time.Duration { return time.Millisecond }
+	var mu sync.Mutex
+	transfersRuns := 0
+	runs := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return transfersRuns
+	}
+	workerCommand = func(w *worker) (*exec.Cmd, string, error) {
+		f.mu.Lock()
+		f.starts++
+		f.mu.Unlock()
+		if w.kind == "app-transfers" {
+			mu.Lock()
+			transfersRuns++
+			n := transfersRuns
+			mu.Unlock()
+			if n == 1 {
+				return shellCmd("exit 1"), "fake", nil
+			}
+		}
+		return pingCmd(), "fake", nil
+	}
+	f.d.startAutoWorkers()
+	if !eventually(t, 5*time.Second, func() bool { return runs() >= 2 }) || !f.bothRunning(t) {
+		t.Fatalf("transfers not restarted: runs %d, state %q", runs(), f.appState("app-transfers"))
+	}
+	if got := f.befores(); len(got) != 1 {
+		t.Errorf("before commands = %v, want one run", got)
+	}
+}
+
+func TestAppWorkerCommand(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "config"), 0o755)
+	os.WriteFile(filepath.Join(dir, "config", "queue.php"), []byte(appQueueConf), 0o644)
+	os.WriteFile(filepath.Join(dir, "php.exe"), nil, 0o644)
+	ws := install.AppByName("dbzuper").Workers(dir)
+	if len(ws.Run) == 0 || ws.Run[0].Name != "transfers" {
+		t.Fatalf("workers = %+v", ws)
+	}
+	w := &worker{kind: "app-transfers", args: ws.Run[0].Args, site: sites.Site{Path: dir}, phpExe: filepath.Join(dir, "php.exe")}
+	cmd, line, err := realWorkerCommand(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "php artisan queue:work transfers --queue=transfers --sleep=1 --tries=1 --timeout=0"; line != want {
+		t.Errorf("line = %q, want %q", line, want)
+	}
+	if cmd.Dir != dir {
+		t.Errorf("Dir = %q, want %q", cmd.Dir, dir)
+	}
+}
+
+func TestAppWorkersHold(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	f.d.startAutoWorkers()
+	if !f.bothRunning(t) {
+		t.Fatal("not running")
+	}
+	if !f.d.stopAppWorkers("dbzuper", true) {
+		t.Fatal("stopAppWorkers: still stopping")
+	}
+	for _, k := range []string{"app-transfers", "app-default"} {
+		if st := f.appState(k); st != workerStopped {
+			t.Errorf("%s after stop = %q, want stopped", k, st)
+		}
+	}
+	n := f.count()
+	f.d.syncWorkers()
+	f.d.startAutoWorkers()
+	time.Sleep(200 * time.Millisecond)
+	if f.count() != n || f.appState("app-transfers") != workerStopped || f.appState("app-default") != workerStopped {
+		t.Errorf("held workers started again: starts %d -> %d", n, f.count())
+	}
+	if err := f.d.startWorker("app-transfers", "dbzuper.test"); err == nil {
+		t.Errorf("startWorker of a held worker: no error")
+	}
+	if err := f.d.releaseAppWorkers("dbzuper"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.bothRunning(t) {
+		t.Fatal("not running after release")
+	}
+	if got := f.befores(); len(got) != 2 {
+		t.Errorf("before commands = %v, want two runs", got)
+	}
+}
+
+func TestAppWorkersStopWaitsForStart(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	f.block = make(chan struct{})
+	go f.d.startAppWorkers("dbzuper")
+	<-f.entered
+	// A second start while the first one's before command runs does nothing.
+	if err := f.d.startAppWorkers("dbzuper"); err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan bool)
+	go func() { stopped <- f.d.stopAppWorkers("dbzuper", true) }()
+	time.Sleep(100 * time.Millisecond)
+	f.bmu.Lock()
+	close(f.block)
+	f.bmu.Unlock()
+	if ok := <-stopped; !ok {
+		t.Fatal("stopAppWorkers: still stopping")
+	}
+	if f.count() != 0 {
+		t.Errorf("a held app started %d workers", f.count())
+	}
+	if got := f.befores(); len(got) != 1 {
+		t.Errorf("before commands = %v, want one run", got)
+	}
+}
+
+func TestAppWorkersReleaseDuringStart(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	f.block = make(chan struct{})
+	go f.d.startAppWorkers("dbzuper")
+	<-f.entered
+	f.d.mu.Lock()
+	f.d.appHold = map[string]bool{"dbzuper": true} // held while its before command runs
+	f.d.mu.Unlock()
+	f.bmu.Lock()
+	close(f.block)
+	f.block = nil
+	f.bmu.Unlock()
+	// The start under way may or may not have been refused by now; either
+	// way the release ends with both running.
+	if err := f.d.releaseAppWorkers("dbzuper"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.bothRunning(t) {
+		t.Fatalf("transfers %q, default %q after release", f.appState("app-transfers"), f.appState("app-default"))
+	}
+}
+
+func TestAppWorkersFollowApp(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	f.d.startAutoWorkers()
+	if !f.bothRunning(t) {
+		t.Fatal("not running")
+	}
+	f.d.mu.Lock()
+	delete(f.d.cfg.Apps, "dbzuper")
+	f.d.mu.Unlock()
+	setSites(f.d)
+	f.d.syncWorkers()
+	for _, k := range []string{"app-transfers", "app-default"} {
+		if st := f.d.workerState(k, "dbzuper.test"); st.State != workerOff || st.PID != 0 {
+			t.Errorf("%s after remove = %+v, want off", k, st)
+		}
+	}
+
+	f.d.mu.Lock()
+	f.d.cfg.Apps["dbzuper"] = "1.0"
+	f.d.mu.Unlock()
+	setSites(f.d, f.appSites()...)
+	f.d.syncWorkers()
+	if !f.bothRunning(t) {
+		t.Fatalf("transfers %q, default %q after the app came back", f.appState("app-transfers"), f.appState("app-default"))
+	}
+	if got := f.befores(); len(got) != 2 {
+		t.Errorf("before commands = %v, want two runs", got)
+	}
+}
+
+func TestAppWorkersHiddenFromSiteList(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	f.d.startAutoWorkers()
+	if !f.bothRunning(t) {
+		t.Fatal("not running")
+	}
+	for _, w := range f.d.switchedOnWorkers() {
+		if isAppKind(w.Kind) {
+			t.Errorf("switchedOnWorkers lists %+v", w)
+		}
+	}
+	for _, w := range f.d.status().Workers {
+		if isAppKind(w.Kind) {
+			t.Errorf("status lists %+v", w)
+		}
+	}
+}
+
+func TestAppWorkersOldRelease(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	os.WriteFile(filepath.Join(f.app, "config", "queue.php"), []byte("<?php\nreturn ['connections' => ['database' => []]];\n"), 0o644)
+	f.d.startAutoWorkers()
+	time.Sleep(200 * time.Millisecond)
+	if f.count() != 0 || len(f.befores()) != 0 {
+		t.Errorf("starts %d, before commands %v, want none", f.count(), f.befores())
+	}
+	f.d.mu.Lock()
+	n := len(f.d.workers)
+	f.d.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d workers, want none", n)
 	}
 }

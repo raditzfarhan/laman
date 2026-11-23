@@ -132,6 +132,7 @@ type daemon struct {
 	devs       map[string]*devServer // Node dev servers by site host; guarded by mu
 	devRefresh bool                  // a refresh for a dev server change is queued; guarded by mu
 	workers    map[string]*worker    // queue and Reverb workers by kind+"|"+host; guarded by mu
+	appHold    map[string]bool       // apps whose workers are held stopped (e.g. during an update); guarded by mu
 	// workersReady: the start with laman has started the switched-on
 	// workers; from then on a rescan starts those of new sites. Guarded by mu.
 	workersReady bool

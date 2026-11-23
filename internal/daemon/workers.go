@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,13 +14,15 @@ import (
 	"time"
 
 	"laman/internal/config"
+	"laman/internal/install"
 	"laman/internal/sites"
 )
 
 // Workers: a Laravel site's queue worker (`php artisan queue:listen`) and
 // Reverb server, run with the site's own PHP. Unlike dev servers they are
 // restarted when they exit, with a growing delay, until they crash too
-// often in a short time.
+// often in a short time. An installed app's workers (DBZuper's queues) run
+// the same way, as kind "app-<name>" on the app's own site.
 
 const (
 	workerQueue  = "queue"
@@ -83,8 +86,9 @@ type worker struct {
 
 	mu      sync.Mutex
 	state   string
-	port    int    // Reverb's port
-	phpExe  string // the site's php.exe, set before each start
+	port    int      // Reverb's port
+	args    []string // an app worker's artisan arguments
+	phpExe  string   // the site's php.exe, set before each start
 	pid     int
 	run     *workerRun // the started process, until its exit is processed
 	cmdline string
@@ -185,7 +189,8 @@ func (d *daemon) workerLog(kind, host string) string {
 // crashed or was stopped is started afresh. A worker switched off in the
 // config is not started.
 func (d *daemon) startWorker(kind, host string) error {
-	if kind != workerQueue && kind != workerReverb {
+	app := isAppKind(kind)
+	if kind != workerQueue && kind != workerReverb && !app {
 		return fmt.Errorf("unknown worker %q", kind)
 	}
 	site, ok := d.findSite(host)
@@ -194,6 +199,17 @@ func (d *daemon) startWorker(kind, host string) error {
 	}
 	if !exists(filepath.Join(site.Path, "artisan")) {
 		return fmt.Errorf("%s is not a Laravel app", site.Host)
+	}
+	var args []string
+	if app {
+		// Only the app's own site runs its workers, never an alias.
+		name := strings.TrimPrefix(kind, "app-")
+		if site.App == "" || site.Name != site.App {
+			return fmt.Errorf("no %s worker for %s", name, site.Host)
+		}
+		if args = appWorkerArgs(site, name); args == nil {
+			return fmt.Errorf("no %s worker for %s", name, site.App)
+		}
 	}
 	d.mu.Lock()
 	// Checked under d.mu, which the switch route also holds when it changes
@@ -219,6 +235,9 @@ func (d *daemon) startWorker(kind, host string) error {
 		return nil
 	}
 	w.site = site // the folder or PHP may have changed since the last start
+	if app {
+		w.args = args // an update may have changed them
+	}
 	w.failed = false
 	w.gen++
 	gen := w.gen
@@ -249,15 +268,7 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 		return err
 	}
 
-	// The PHP the site resolved to at its last rescan, so that syncWorkers
-	// can tell when it changes; a site not yet rescanned asks the config.
-	v := site.PHP
-	if v == "" {
-		d.mu.Lock()
-		v, _ = d.cfg.PHPFor(site.Name)
-		d.mu.Unlock()
-	}
-	phpExe := filepath.Join(config.BinDir("php"), v, "php.exe")
+	phpExe := d.workerPHP(site)
 
 	port := 0
 	switch w.kind {
@@ -392,6 +403,19 @@ func (d *daemon) launchWorker(w *worker, gen int, fresh bool) error {
 		releaseProcess(run.h)
 	}()
 	return nil
+}
+
+// workerPHP is the php.exe a worker of site runs on: the version the site
+// resolved to at its last rescan, so that syncWorkers can tell when it
+// changes; a site not yet rescanned asks the config.
+func (d *daemon) workerPHP(site sites.Site) string {
+	v := site.PHP
+	if v == "" {
+		d.mu.Lock()
+		v, _ = d.cfg.PHPFor(site.Name)
+		d.mu.Unlock()
+	}
+	return filepath.Join(config.BinDir("php"), v, "php.exe")
 }
 
 // workerExited records an exit: a stop, or a crash that is retried after a
@@ -553,11 +577,12 @@ func (d *daemon) reverbPort(name string) (int, error) {
 	return p, nil
 }
 
-// realWorkerCommand: `php artisan queue:listen ...` or `php artisan
-// reverb:start ...` in the project folder, with the site's PHP.
+// realWorkerCommand: `php artisan queue:listen ...`, `php artisan
+// reverb:start ...` or an app worker's own command in the project folder,
+// with the site's PHP.
 func realWorkerCommand(w *worker) (*exec.Cmd, string, error) {
 	w.mu.Lock()
-	kind, dir, phpExe, port := w.kind, w.site.Path, w.phpExe, w.port
+	kind, dir, phpExe, port, appArgs := w.kind, w.site.Path, w.phpExe, w.port, w.args
 	w.mu.Unlock()
 	if !exists(phpExe) {
 		return nil, "", fmt.Errorf("PHP is not installed at %s", phpExe)
@@ -578,7 +603,10 @@ func realWorkerCommand(w *worker) (*exec.Cmd, string, error) {
 	case workerReverb:
 		args = reverbArgs(port)
 	default:
-		return nil, "", fmt.Errorf("unknown worker %q", kind)
+		if !isAppKind(kind) {
+			return nil, "", fmt.Errorf("unknown worker %q", kind)
+		}
+		args = appArgs
 	}
 	cmd := exec.Command(phpExe, append([]string{"artisan"}, args...)...)
 	cmd.Dir = dir
@@ -693,8 +721,12 @@ func (w *worker) active() bool {
 }
 
 // switchedOn reports whether the site's worker of kind is switched on in the
-// config. Callers hold d.mu.
+// config. An app's workers have no switch: they are on while the app is
+// installed and not held. Callers hold d.mu.
 func (d *daemon) switchedOn(kind, name string) bool {
+	if isAppKind(kind) {
+		return d.cfg.Apps[name] != "" && !d.appHold[name]
+	}
 	if kind == workerReverb {
 		return d.cfg.Reverb[name]
 	}
@@ -707,9 +739,13 @@ func (d *daemon) switchedOn(kind, name string) bool {
 func (d *daemon) startAutoWorkers() {
 	type job struct{ kind, host string }
 	var jobs []job
+	var apps []string
 	d.mu.Lock()
 	d.workersReady = true
 	for _, s := range d.sites {
+		if isAppSite(s) && d.switchedOn("app-", s.App) {
+			apps = append(apps, s.App)
+		}
 		for _, kind := range []string{workerQueue, workerReverb} {
 			if d.switchedOn(kind, s.Name) {
 				jobs = append(jobs, job{kind, s.Host})
@@ -717,6 +753,7 @@ func (d *daemon) startAutoWorkers() {
 		}
 	}
 	d.mu.Unlock()
+	d.startAppWorkersLater(apps)
 	for _, j := range jobs {
 		if err := d.startWorker(j.kind, j.host); err != nil {
 			logf("start %s worker for %s: %v", j.kind, j.host, err)
@@ -736,6 +773,9 @@ func (d *daemon) syncWorkers() {
 		w          *worker
 	}
 	var gone, start, restart, off []job
+	// An app's workers start and restart as a set, through startAppWorkers,
+	// so that its Before commands run first.
+	startApps, restartApps := map[string]bool{}, map[string]bool{}
 	d.mu.Lock()
 	byHost := make(map[string]sites.Site, len(d.sites))
 	for _, s := range d.sites {
@@ -748,13 +788,22 @@ func (d *daemon) syncWorkers() {
 		case !ok && !w.gone:
 			gone = append(gone, job{w.kind, w.site.Host, w})
 		case ok && w.gone:
-			if d.switchedOn(w.kind, s.Name) {
+			if !d.switchedOn(w.kind, s.Name) {
+				break
+			}
+			if isAppKind(w.kind) {
+				startApps[s.App] = true
+			} else {
 				start = append(start, job{w.kind, s.Host, w})
 			}
 		case ok && w.active() && !d.switchedOn(w.kind, s.Name):
 			off = append(off, job{w.kind, s.Host, w}) // switched off in config.json
 		case ok && w.active() && w.site.PHP != s.PHP:
-			restart = append(restart, job{w.kind, s.Host, w})
+			if isAppKind(w.kind) {
+				restartApps[s.App] = true
+			} else {
+				restart = append(restart, job{w.kind, s.Host, w})
+			}
 		}
 		w.mu.Unlock()
 	}
@@ -762,8 +811,12 @@ func (d *daemon) syncWorkers() {
 	// turned on in config.json. Not before the start with laman, which
 	// starts them in its own time.
 	var fresh []job
+	var appSites []sites.Site
 	if d.workersReady {
 		for _, s := range d.sites {
+			if isAppSite(s) && d.switchedOn("app-", s.App) {
+				appSites = append(appSites, s)
+			}
 			for _, kind := range []string{workerQueue, workerReverb} {
 				if d.switchedOn(kind, s.Name) && d.workers[workerKey(kind, s.Host)] == nil {
 					fresh = append(fresh, job{kind, s.Host, nil})
@@ -806,6 +859,31 @@ func (d *daemon) syncWorkers() {
 			logf("start %s worker for %s: %v", j.kind, j.host, err)
 		}
 	}
+
+	// Apps with a worker never started: one just installed, or one that now
+	// declares a worker it did not before. Read outside d.mu (a file read).
+	for _, s := range appSites {
+		if spec := install.AppByName(s.App); spec != nil {
+			for _, r := range spec.Workers(s.Path).Run {
+				if d.worker("app-"+r.Name, s.Host) == nil {
+					startApps[s.App] = true
+				}
+			}
+		}
+	}
+	for app := range restartApps {
+		logf("%s workers: PHP changed, restarting", app)
+		if !d.stopAppWorkers(app, false) {
+			logf("%s workers: still stopping after %s", app, workerStopWait)
+			continue
+		}
+		startApps[app] = true
+	}
+	apps := make([]string, 0, len(startApps))
+	for app := range startApps {
+		apps = append(apps, app)
+	}
+	d.startAppWorkersLater(apps)
 }
 
 // workersServiceChanged starts the workers waiting for a service; each
@@ -850,6 +928,222 @@ func (d *daemon) restartSiteWorkers(name string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// isAppKind: an installed app's worker ("app-transfers"), not a site's.
+func isAppKind(kind string) bool { return strings.HasPrefix(kind, "app-") }
+
+// isAppSite: the app's own site, the one its workers run on (an alias such
+// as db.test has the same App but another Name).
+func isAppSite(s sites.Site) bool { return s.App != "" && s.Name == s.App }
+
+// appWorkerArgs: the artisan arguments of the app's worker name as the
+// install in site.Path declares it, or nil when it declares no such worker.
+func appWorkerArgs(site sites.Site, name string) []string {
+	spec := install.AppByName(site.App)
+	if spec == nil {
+		return nil
+	}
+	for _, r := range spec.Workers(site.Path).Run {
+		if r.Name == name {
+			return r.Args
+		}
+	}
+	return nil
+}
+
+// appBeforeCommand runs `php artisan <args>` in dir, once before an app's
+// workers start; tests replace it. A command that hangs is ended after 2
+// minutes so the workers still start.
+var appBeforeCommand = func(phpExe, dir string, args []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, phpExe, append([]string{"artisan"}, args...)...)
+	cmd.Dir = dir
+	cmd.WaitDelay = workerOutputWait // output held open by children it left behind
+	noWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if msg := strings.TrimSpace(tailLines(strings.Split(string(out), "\n"), 5)); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// appStart is a start of an app's workers under way (its Before commands
+// can take a while). There is at most one per app at a time.
+type appStart struct {
+	done  chan struct{} // closed when it is over
+	again bool          // a release came meanwhile: it starts the set once more
+}
+
+type appStartKey struct {
+	d   *daemon
+	app string
+}
+
+var (
+	appStartsMu sync.Mutex // taken on its own, never with d.mu or a worker's mu
+	appStarts   = map[appStartKey]*appStart{}
+)
+
+func (d *daemon) appStartOf(app string) *appStart {
+	appStartsMu.Lock()
+	defer appStartsMu.Unlock()
+	return appStarts[appStartKey{d, app}]
+}
+
+// startAppWorkers starts an installed app's workers on its own site: it runs
+// the app's Before commands once, then starts each worker. Nothing happens
+// when the app has no site, is not installed or is held, and when a start
+// of its workers is already under way.
+func (d *daemon) startAppWorkers(app string) error { return d.runAppWorkers(app, false) }
+
+// startAppWorkersLater starts the apps' workers each in its own goroutine,
+// so their Before commands do not hold up the caller.
+func (d *daemon) startAppWorkersLater(apps []string) {
+	for _, app := range apps {
+		go func() {
+			if err := d.startAppWorkers(app); err != nil {
+				logf("start %s workers: %v", app, err)
+			}
+		}()
+	}
+}
+
+// runAppWorkers is startAppWorkers. A release that finds a start under way
+// has it run once more when done: the workers were stopped meanwhile, and
+// the start under way may already have been refused some of them.
+func (d *daemon) runAppWorkers(app string, release bool) error {
+	key := appStartKey{d, app}
+	appStartsMu.Lock()
+	if st := appStarts[key]; st != nil {
+		st.again = st.again || release
+		appStartsMu.Unlock()
+		return nil
+	}
+	st := &appStart{done: make(chan struct{})}
+	appStarts[key] = st
+	appStartsMu.Unlock()
+	for {
+		err := d.startAppWorkersOnce(app)
+		appStartsMu.Lock()
+		if !st.again {
+			delete(appStarts, key)
+			appStartsMu.Unlock()
+			close(st.done)
+			return err
+		}
+		st.again = false
+		appStartsMu.Unlock()
+		if err != nil {
+			logf("start %s workers: %v", app, err)
+		}
+	}
+}
+
+func (d *daemon) startAppWorkersOnce(app string) error {
+	on := func() (sites.Site, bool) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		for _, s := range d.sites {
+			if s.App == app && isAppSite(s) {
+				return s, d.switchedOn("app-", app)
+			}
+		}
+		return sites.Site{}, false
+	}
+	site, ok := on()
+	spec := install.AppByName(app)
+	if !ok || spec == nil {
+		return nil
+	}
+	ws := spec.Workers(site.Path)
+	if len(ws.Run) == 0 {
+		return nil
+	}
+	// The Before commands settle what the last run left unfinished (DBZuper
+	// marks interrupted transfers failed); with one of the workers still
+	// running they would settle work in progress, so they run only when
+	// none is.
+	busy := false
+	for _, r := range ws.Run {
+		if w := d.worker("app-"+r.Name, site.Host); w != nil {
+			w.mu.Lock()
+			busy = busy || w.state == workerRunning || w.state == workerStarting
+			w.mu.Unlock()
+		}
+	}
+	if !busy {
+		phpExe := d.workerPHP(site)
+		for _, args := range ws.Before {
+			if err := appBeforeCommand(phpExe, site.Path, args); err != nil {
+				logf("%s: php artisan %s: %v", app, strings.Join(args, " "), err)
+			}
+		}
+		if _, ok := on(); !ok {
+			return nil // held or removed meanwhile
+		}
+	}
+	// startWorker checks the hold again under d.mu, so a hold set from here
+	// on either refuses a start or stops what it started.
+	var errs []error
+	for _, r := range ws.Run {
+		errs = append(errs, d.startWorker("app-"+r.Name, site.Host))
+	}
+	return errors.Join(errs...)
+}
+
+// stopAppWorkers stops an app's workers and waits for them; with hold they
+// stay stopped (nothing starts them) until releaseAppWorkers. It reports
+// false when one had not exited within workerStopWait.
+func (d *daemon) stopAppWorkers(app string, hold bool) bool {
+	if hold {
+		d.mu.Lock()
+		if d.appHold == nil {
+			d.appHold = map[string]bool{}
+		}
+		d.appHold[app] = true
+		d.mu.Unlock()
+	}
+	ok := true
+	// A start under way finishes first, so it cannot start a worker after
+	// the stop below (held, it starts none; else the stop gets them too).
+	if st := d.appStartOf(app); st != nil {
+		select {
+		case <-st.done:
+		case <-time.After(workerStopWait):
+			ok = false
+		}
+	}
+	type job struct{ kind, host string }
+	var jobs []job
+	d.mu.Lock()
+	for _, w := range d.workers {
+		w.mu.Lock()
+		if isAppKind(w.kind) && w.site.App == app && isAppSite(w.site) {
+			jobs = append(jobs, job{w.kind, w.site.Host})
+		}
+		w.mu.Unlock()
+	}
+	d.mu.Unlock()
+	for _, j := range jobs {
+		if !d.stopWorkerWait(j.kind, j.host) {
+			ok = false
+		}
+	}
+	return ok
+}
+
+// releaseAppWorkers ends a hold and starts the app's workers, if it is
+// installed.
+func (d *daemon) releaseAppWorkers(app string) error {
+	d.mu.Lock()
+	delete(d.appHold, app)
+	d.mu.Unlock()
+	return d.runAppWorkers(app, true)
 }
 
 // watchServicePort waits for a running add-on server to answer on its port,
