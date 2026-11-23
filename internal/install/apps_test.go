@@ -509,6 +509,7 @@ func TestDBZuperWorkers(t *testing.T) {
 			{Name: "transfers", Args: []string{"queue:work", "transfers", "--queue=transfers", "--sleep=1", "--tries=1", "--timeout=0"}},
 			{Name: "default", Args: []string{"queue:work", "database", "--queue=default", "--sleep=3", "--tries=3"}},
 		},
+		Env: map[string]string{"DB_JOURNAL_MODE": "WAL", "DB_TRANSACTION_MODE": "IMMEDIATE", "DB_BUSY_TIMEOUT": "5000"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Workers = %+v, want %+v", got, want)

@@ -53,6 +53,9 @@ type AppWorker struct {
 type AppWorkers struct {
 	Before [][]string // artisan commands run once before the workers start
 	Run    []AppWorker
+	// Env is what the app's .env must hold before its workers start. An
+	// install from an older laman may lack it until its next update.
+	Env map[string]string
 }
 
 // Workers returns the workers the app installed in dir needs, or the zero
@@ -468,21 +471,31 @@ func dbzuperWorkers(dir string) AppWorkers {
 			{Name: "transfers", Args: []string{"queue:work", "transfers", "--queue=transfers", "--sleep=1", "--tries=1", "--timeout=0"}},
 			{Name: "default", Args: []string{"queue:work", "database", "--queue=default", "--sleep=3", "--tries=3"}},
 		},
+		// An install made before laman set these gets them before its
+		// workers first start, not at its next update.
+		Env: dbzuperSQLiteEnv(),
 	}
 }
 
 // dbzuperEnv is what laman keeps set in DBZuper's .env, on install and on
 // every update.
 func dbzuperEnv(c *AppCtx) map[string]string {
-	return map[string]string{
+	env := map[string]string{
 		"APP_URL": c.URL, "APP_ENV": "production", "APP_DEBUG": "false", "LOG_LEVEL": "warning",
 		// A private install on this computer: any 8+ character password.
 		"DBZUPER_PASSWORD_POLICY": "basic",
-		// Several processes (web, queue workers) write the one SQLite file:
-		// WAL lets readers and a writer coexist, IMMEDIATE takes the write
-		// lock up front, and waiting beats failing with "database is locked".
-		"DB_JOURNAL_MODE": "WAL", "DB_TRANSACTION_MODE": "IMMEDIATE", "DB_BUSY_TIMEOUT": "5000",
 	}
+	for k, v := range dbzuperSQLiteEnv() {
+		env[k] = v
+	}
+	return env
+}
+
+// dbzuperSQLiteEnv: several processes (web, queue workers) write the one
+// SQLite file. WAL lets readers and a writer coexist, IMMEDIATE takes the
+// write lock up front, and waiting beats failing with "database is locked".
+func dbzuperSQLiteEnv() map[string]string {
+	return map[string]string{"DB_JOURNAL_MODE": "WAL", "DB_TRANSACTION_MODE": "IMMEDIATE", "DB_BUSY_TIMEOUT": "5000"}
 }
 
 // runArtisan runs an artisan command in dir. A variable so tests can replace it.

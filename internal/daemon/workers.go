@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1071,6 +1072,8 @@ func (d *daemon) startAppWorkersOnce(app string) error {
 	if len(ws.Run) == 0 {
 		return nil
 	}
+	phpExe := d.workerPHP(site)
+	setAppEnv(app, phpExe, site.Path, ws.Env)
 	// The Before commands settle what the last run left unfinished (DBZuper
 	// marks interrupted transfers failed); with one of the workers still
 	// running they would settle work in progress, so they run only when
@@ -1084,7 +1087,6 @@ func (d *daemon) startAppWorkersOnce(app string) error {
 		}
 	}
 	if !busy {
-		phpExe := d.workerPHP(site)
 		for _, args := range ws.Before {
 			if err := appBeforeCommand(phpExe, site.Path, args); err != nil {
 				logf("%s: php artisan %s: %v", app, strings.Join(args, " "), err)
@@ -1101,6 +1103,45 @@ func (d *daemon) startAppWorkersOnce(app string) error {
 		errs = append(errs, d.startWorker("app-"+r.Name, site.Host))
 	}
 	return errors.Join(errs...)
+}
+
+// setAppEnv puts the values an app's workers need into its .env, for an
+// install made before laman set them (DBZuper's SQLite lock settings: its
+// workers fail with "database is locked" without them). Only values that
+// differ are written, so a .env already right is left as it is. When the
+// app caches its config, the cache is cleared so the new values count.
+// Failures are logged: the workers start regardless.
+func setAppEnv(app, phpExe, dir string, want map[string]string) {
+	if len(want) == 0 {
+		return
+	}
+	have, ok := readEnvFile(dir)
+	if !ok {
+		logf("%s: no .env in %s, its worker settings are not set", app, dir)
+		return
+	}
+	set := map[string]string{}
+	var keys []string
+	for k, v := range want {
+		if cur, ok := have[k]; !ok || cur != v {
+			set[k] = v
+			keys = append(keys, k)
+		}
+	}
+	if len(set) == 0 {
+		return
+	}
+	sort.Strings(keys)
+	if err := install.SetEnv(filepath.Join(dir, ".env"), set); err != nil {
+		logf("%s: setting %s in .env: %v", app, strings.Join(keys, ", "), err)
+		return
+	}
+	logf("%s: set %s in .env", app, strings.Join(keys, ", "))
+	if exists(filepath.Join(dir, "bootstrap", "cache", "config.php")) {
+		if err := appBeforeCommand(phpExe, dir, []string{"config:clear"}); err != nil {
+			logf("%s: php artisan config:clear: %v", app, err)
+		}
+	}
 }
 
 // stopAppWorkers stops an app's workers and waits for them; with hold they

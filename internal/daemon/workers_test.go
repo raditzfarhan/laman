@@ -1356,6 +1356,58 @@ func TestAppWorkersFollowApp(t *testing.T) {
 	}
 }
 
+func TestAppWorkersSetEnvFirst(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	env := filepath.Join(f.app, ".env")
+	os.WriteFile(env, []byte("APP_KEY=k\r\nDB_BUSY_TIMEOUT=100\r\n"), 0o644)
+	os.MkdirAll(filepath.Join(f.app, "bootstrap", "cache"), 0o755)
+	os.WriteFile(filepath.Join(f.app, "bootstrap", "cache", "config.php"), []byte("<?php return [];"), 0o644)
+	f.d.startAutoWorkers()
+	if !f.bothRunning(t) {
+		t.Fatal("not running")
+	}
+	b, _ := os.ReadFile(env)
+	vals := map[string]string{}
+	for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		if k, v, ok := strings.Cut(l, "="); ok {
+			vals[k] = v
+		}
+	}
+	for k, v := range map[string]string{"APP_KEY": "k", "DB_JOURNAL_MODE": "WAL", "DB_TRANSACTION_MODE": "IMMEDIATE", "DB_BUSY_TIMEOUT": "5000"} {
+		if vals[k] != v {
+			t.Errorf(".env %s = %q, want %q:\n%s", k, vals[k], v, b)
+		}
+	}
+	want := [][]string{{"config:clear"}, {"dbzuper:transfers:recover"}}
+	if got := f.befores(); !reflect.DeepEqual(got, want) {
+		t.Errorf("before commands = %v, want %v", got, want)
+	}
+	f.bmu.Lock()
+	if len(f.beforeAt) == 0 || f.beforeAt[0] != 0 {
+		t.Errorf("config:clear ran after %v worker starts, want before any", f.beforeAt)
+	}
+	f.bmu.Unlock()
+}
+
+func TestAppWorkersEnvAlreadySet(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	env := filepath.Join(f.app, ".env")
+	orig := "DB_JOURNAL_MODE=WAL\r\nDB_TRANSACTION_MODE=IMMEDIATE\r\nDB_BUSY_TIMEOUT=5000\r\n"
+	os.WriteFile(env, []byte(orig), 0o644)
+	os.MkdirAll(filepath.Join(f.app, "bootstrap", "cache"), 0o755)
+	os.WriteFile(filepath.Join(f.app, "bootstrap", "cache", "config.php"), []byte("<?php return [];"), 0o644)
+	f.d.startAutoWorkers()
+	if !f.bothRunning(t) {
+		t.Fatal("not running")
+	}
+	if b, _ := os.ReadFile(env); string(b) != orig {
+		t.Errorf(".env rewritten:\n%s", b)
+	}
+	if got := f.befores(); !reflect.DeepEqual(got, recoverCmd) {
+		t.Errorf("before commands = %v, want %v", got, recoverCmd)
+	}
+}
+
 func TestAppOn(t *testing.T) {
 	// Installed, version not recorded.
 	d := &daemon{cfg: &config.Config{Apps: map[string]string{"dbzuper": ""}}}
