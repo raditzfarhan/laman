@@ -721,16 +721,23 @@ func (w *worker) active() bool {
 }
 
 // switchedOn reports whether the site's worker of kind is switched on in the
-// config. An app's workers have no switch: they are on while the app is
-// installed and not held. Callers hold d.mu.
+// config. An app's workers have no switch: see appOn. Callers hold d.mu.
 func (d *daemon) switchedOn(kind, name string) bool {
 	if isAppKind(kind) {
-		return d.cfg.Apps[name] != "" && !d.appHold[name]
+		return d.appOn(name)
 	}
 	if kind == workerReverb {
 		return d.cfg.Reverb[name]
 	}
 	return d.cfg.QueueWorkers[name]
+}
+
+// appOn reports whether an app's workers should run: the app is installed
+// (listed in the config, as the CLI checks it) and not held. Callers hold
+// d.mu.
+func (d *daemon) appOn(app string) bool {
+	_, installed := d.cfg.Apps[app]
+	return installed && !d.appHold[app]
 }
 
 // startAutoWorkers starts every switched-on worker, once at daemon start
@@ -743,7 +750,7 @@ func (d *daemon) startAutoWorkers() {
 	d.mu.Lock()
 	d.workersReady = true
 	for _, s := range d.sites {
-		if isAppSite(s) && d.switchedOn("app-", s.App) {
+		if isAppSite(s) && d.appOn(s.App) {
 			apps = append(apps, s.App)
 		}
 		for _, kind := range []string{workerQueue, workerReverb} {
@@ -814,7 +821,7 @@ func (d *daemon) syncWorkers() {
 	var appSites []sites.Site
 	if d.workersReady {
 		for _, s := range d.sites {
-			if isAppSite(s) && d.switchedOn("app-", s.App) {
+			if isAppSite(s) && d.appOn(s.App) {
 				appSites = append(appSites, s)
 			}
 			for _, kind := range []string{workerQueue, workerReverb} {
@@ -1050,7 +1057,7 @@ func (d *daemon) startAppWorkersOnce(app string) error {
 		defer d.mu.Unlock()
 		for _, s := range d.sites {
 			if s.App == app && isAppSite(s) {
-				return s, d.switchedOn("app-", app)
+				return s, d.appOn(app)
 			}
 		}
 		return sites.Site{}, false

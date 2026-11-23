@@ -1356,6 +1356,21 @@ func TestAppWorkersFollowApp(t *testing.T) {
 	}
 }
 
+func TestAppOn(t *testing.T) {
+	// Installed, version not recorded.
+	d := &daemon{cfg: &config.Config{Apps: map[string]string{"dbzuper": ""}}}
+	if !d.appOn("dbzuper") {
+		t.Error("an installed app with no version is not on")
+	}
+	if d.appOn("adminer") {
+		t.Error("an app not installed is on")
+	}
+	d.appHold = map[string]bool{"dbzuper": true}
+	if d.appOn("dbzuper") || d.switchedOn("app-transfers", "dbzuper") {
+		t.Error("a held app is on")
+	}
+}
+
 func TestAppWorkersHiddenFromSiteList(t *testing.T) {
 	f := appFixture(t, pingCmd)
 	f.d.startAutoWorkers()
