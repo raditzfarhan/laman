@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -309,4 +310,84 @@ func TestInstallAppCarryFailureRestoresFolders(t *testing.T) {
 		t.Errorf("app.txt = %q", got)
 	}
 	noSideDirs(t, dir)
+}
+
+func TestDBZuperEnv(t *testing.T) {
+	want := map[string]string{
+		"APP_URL": "https://dbzuper.test", "APP_ENV": "production", "APP_DEBUG": "false", "LOG_LEVEL": "warning",
+		"DBZUPER_PASSWORD_POLICY": "basic",
+		"DB_JOURNAL_MODE":         "WAL", "DB_TRANSACTION_MODE": "IMMEDIATE", "DB_BUSY_TIMEOUT": "5000",
+	}
+	if got := dbzuperEnv(&AppCtx{URL: "https://dbzuper.test"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("dbzuperEnv = %v", got)
+	}
+}
+
+func stubArtisan(t *testing.T, fn func(dir string, args []string) error) {
+	t.Helper()
+	old := runArtisan
+	t.Cleanup(func() { runArtisan = old })
+	runArtisan = func(c *AppCtx, dir string, args ...string) error { return fn(dir, args) }
+}
+
+func TestDBZuperPrepare(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	os.WriteFile(env, []byte("APP_URL=http://old\r\nDB_JOURNAL_MODE=\r\nCUSTOM=1\r\n"), 0o644)
+	var gotDir string
+	var gotArgs []string
+	stubArtisan(t, func(d string, args []string) error { gotDir, gotArgs = d, args; return nil })
+	if err := dbzuperPrepare(dir, &AppCtx{URL: "https://dbzuper.test"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(env)
+	for _, want := range []string{"APP_URL=https://dbzuper.test\n", "DB_JOURNAL_MODE=WAL\n", "DB_TRANSACTION_MODE=IMMEDIATE\n", "DB_BUSY_TIMEOUT=5000\n", "CUSTOM=1"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf(".env lacks %q:\n%s", want, b)
+		}
+	}
+	if gotDir != dir || !reflect.DeepEqual(gotArgs, []string{"migrate", "--force"}) {
+		t.Errorf("artisan ran %v in %s", gotArgs, gotDir)
+	}
+	boom := errors.New("boom")
+	stubArtisan(t, func(string, []string) error { return boom })
+	if err := dbzuperPrepare(dir, &AppCtx{URL: "u"}); !errors.Is(err, boom) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestDBZuperSpecWiring(t *testing.T) {
+	if dbzuperApp.prepare == nil {
+		t.Error("prepare not set")
+	}
+	want := []string{".env", "database/database.sqlite", "database/database.sqlite-wal", "database/database.sqlite-shm", "storage/app"}
+	if !reflect.DeepEqual(dbzuperApp.keep, want) {
+		t.Errorf("keep = %v", dbzuperApp.keep)
+	}
+}
+
+func TestDBZuperInstallLeavesNoStagingDB(t *testing.T) {
+	dir, old := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "database"), 0o755)
+	os.MkdirAll(filepath.Join(old, "database"), 0o755)
+	os.WriteFile(filepath.Join(old, "database", "database.sqlite"), []byte("x"), 0o644)
+	oldSnap := sqliteSnapshot
+	t.Cleanup(func() { sqliteSnapshot = oldSnap })
+	sqliteSnapshot = func(php, from, to string) error { return os.WriteFile(to, []byte("copy"), 0o644) }
+	var ran []string
+	stubArtisan(t, func(d string, args []string) error {
+		ran = args
+		return os.WriteFile(filepath.Join(d, "database", "database.sqlite-wal"), []byte("w"), 0o644)
+	})
+	if err := dbzuperPrecheck(dir, &AppCtx{Old: old}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ran, []string{"migrate", "--force"}) {
+		t.Errorf("ran %v", ran)
+	}
+	for _, f := range []string{"database.sqlite", "database.sqlite-wal", "database.sqlite-shm"} {
+		if exists(filepath.Join(dir, "database", f)) {
+			t.Errorf("%s left behind", f)
+		}
+	}
 }

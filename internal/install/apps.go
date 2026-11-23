@@ -330,7 +330,9 @@ var dbzuperApp = &AppSpec{
 	PHP:    ">=8.4",
 	latest: func() (string, error) { return githubLatest("dbzuper/dbzuper") },
 	// Its own database (accounts, saved connections, history) and uploads.
-	keep: []string{".env", "database/database.sqlite", "storage/app"},
+	// The -wal and -shm files hold writes not yet merged into the main file.
+	keep:    []string{".env", "database/database.sqlite", "database/database.sqlite-wal", "database/database.sqlite-shm", "storage/app"},
+	prepare: dbzuperPrepare,
 	install: func(dir, version string, c *AppCtx) error {
 		if c.From != "" {
 			// A local checkout (DBZuper development): its source, not its
@@ -377,25 +379,21 @@ var dbzuperApp = &AppSpec{
 		} else if err := copyInto(filepath.Join(dir, ".env.example"), env); err != nil {
 			return err
 		}
-		if err := setEnv(env, map[string]string{
-			"APP_URL": c.URL, "APP_ENV": "production", "APP_DEBUG": "false", "LOG_LEVEL": "warning",
-			// A private install on this computer: any 8+ character password.
-			"DBZUPER_PASSWORD_POLICY": "basic",
-		}); err != nil {
+		if err := setEnv(env, dbzuperEnv(c)); err != nil {
 			return err
 		}
 		if c.Old != "" && exists(filepath.Join(c.Old, "database", "database.sqlite")) {
-			if err := copyInto(filepath.Join(c.Old, "database", "database.sqlite"), filepath.Join(dir, "database", "database.sqlite")); err != nil {
+			if err := dbzuperPrecheck(dir, c); err != nil {
 				return err
 			}
 		} else {
 			os.WriteFile(filepath.Join(dir, "database", "database.sqlite"), nil, 0o644)
-			if err := run(c, dir, c.PHP, "artisan", "key:generate", "--force"); err != nil {
+			if err := runArtisan(c, dir, "key:generate", "--force"); err != nil {
 				return err
 			}
-		}
-		if err := run(c, dir, c.PHP, "artisan", "migrate", "--force"); err != nil {
-			return err
+			if err := runArtisan(c, dir, "migrate", "--force"); err != nil {
+				return err
+			}
 		}
 		node := NodeDir(config.Latest("node"))
 		if node == "" {
@@ -418,6 +416,66 @@ var dbzuperApp = &AppSpec{
 		return nil
 	},
 	done: dbzuperDone,
+}
+
+// dbzuperEnv is what laman keeps set in DBZuper's .env, on install and on
+// every update.
+func dbzuperEnv(c *AppCtx) map[string]string {
+	return map[string]string{
+		"APP_URL": c.URL, "APP_ENV": "production", "APP_DEBUG": "false", "LOG_LEVEL": "warning",
+		// A private install on this computer: any 8+ character password.
+		"DBZUPER_PASSWORD_POLICY": "basic",
+		// Several processes (web, queue workers) write the one SQLite file:
+		// WAL lets readers and a writer coexist, IMMEDIATE takes the write
+		// lock up front, and waiting beats failing with "database is locked".
+		"DB_JOURNAL_MODE": "WAL", "DB_TRANSACTION_MODE": "IMMEDIATE", "DB_BUSY_TIMEOUT": "5000",
+	}
+}
+
+// runArtisan runs an artisan command in dir. A variable so tests can replace it.
+var runArtisan = func(c *AppCtx, dir string, args ...string) error {
+	return run(c, dir, c.PHP, append([]string{"artisan"}, args...)...)
+}
+
+// sqliteSnapshot copies the SQLite database at from into a new file at to,
+// folding in anything still in its -wal file. Both paths go to PHP as
+// arguments, never into its source. A variable so tests can replace it.
+var sqliteSnapshot = func(php, from, to string) error {
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return err
+	}
+	os.Remove(to) // VACUUM INTO refuses an existing file
+	code := `$db = new PDO('sqlite:'.$argv[1]); $st = $db->prepare('VACUUM INTO ?'); $st->execute([$argv[2]]);`
+	cmd := exec.Command(php, "-r", code, from, to)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("copying the database: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// dbzuperPrecheck runs the migrations on a copy of the old database, so a
+// migration that cannot work fails the update before anything is replaced.
+// It is an early check on a copy: the real database arrives by keep and is
+// migrated by prepare, so the copy and its sidecar files are removed.
+func dbzuperPrecheck(dir string, c *AppCtx) error {
+	db := filepath.Join(dir, "database", "database.sqlite")
+	if err := sqliteSnapshot(c.PHP, filepath.Join(c.Old, "database", "database.sqlite"), db); err != nil {
+		return err
+	}
+	err := runArtisan(c, dir, "migrate", "--force")
+	for _, f := range []string{db, db + "-wal", db + "-shm"} {
+		os.Remove(f)
+	}
+	return err
+}
+
+// dbzuperPrepare runs in the staged copy once the kept data is in place:
+// laman's .env values, then the migrations on the database it will use.
+func dbzuperPrepare(dir string, c *AppCtx) error {
+	if err := setEnv(filepath.Join(dir, ".env"), dbzuperEnv(c)); err != nil {
+		return err
+	}
+	return runArtisan(c, dir, "migrate", "--force")
 }
 
 // dbzuperDone makes DBZuper ready to use. A DBZuper that supports it (0.3+)
