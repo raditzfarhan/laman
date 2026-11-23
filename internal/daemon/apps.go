@@ -98,6 +98,29 @@ func (d *daemon) appRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/apps/install", job("Installing", func(n string) []string { return []string{"app", "install", n} }))
 	mux.HandleFunc("POST /api/apps/update", job("Updating", func(n string) []string { return []string{"app", "update", n} }))
 	mux.HandleFunc("POST /api/apps/remove", job("Removing", func(n string) []string { return []string{"app", "remove", n, "--yes"} }))
+	// The CLI holds an app's workers stopped around an update's folder swap
+	// or a removal, then releases them.
+	mux.HandleFunc("POST /api/apps/workers", func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Name, Action string }
+		spec := (*install.AppSpec)(nil)
+		if readJSON(r, &req) == nil {
+			spec = install.AppByName(req.Name)
+		}
+		if spec == nil || (req.Action != "stop" && req.Action != "start") {
+			fail(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if req.Action == "stop" {
+			if !d.stopAppWorkers(spec.Name, true) {
+				fail(w, http.StatusConflict, "%s's workers are still stopping", spec.Title)
+				return
+			}
+		} else if err := d.releaseAppWorkers(spec.Name); err != nil {
+			fail(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
+		writeJSON(w, struct{}{})
+	})
 	mux.HandleFunc("POST /api/apps/default", func(w http.ResponseWriter, r *http.Request) {
 		spec, ok := appArg(r)
 		if !ok || spec.Category != "database" {

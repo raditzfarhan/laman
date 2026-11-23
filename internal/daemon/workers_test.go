@@ -1389,3 +1389,50 @@ func TestAppWorkersOldRelease(t *testing.T) {
 		t.Errorf("%d workers, want none", n)
 	}
 }
+
+func TestAppWorkersRoute(t *testing.T) {
+	f := appFixture(t, pingCmd)
+	mux := http.NewServeMux()
+	f.d.appRoutes(mux)
+	f.d.startAutoWorkers()
+	if !f.bothRunning(t) {
+		t.Fatal("not running")
+	}
+	if rec := call(mux, "POST", "/api/apps/workers", `{"name":"dbzuper","action":"stop"}`); rec.Code != http.StatusOK {
+		t.Fatalf("stop: %d %s", rec.Code, rec.Body)
+	}
+	for _, k := range []string{"app-transfers", "app-default"} {
+		if st := f.appState(k); st == workerRunning || st == workerStarting {
+			t.Errorf("%s after stop = %q", k, st)
+		}
+	}
+	if err := f.d.startWorker("app-transfers", "dbzuper.test"); err == nil {
+		t.Errorf("workers not held after stop")
+	}
+	if rec := call(mux, "POST", "/api/apps/workers", `{"name":"dbzuper","action":"start"}`); rec.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body)
+	}
+	if !f.bothRunning(t) {
+		t.Errorf("not running after start")
+	}
+	for _, body := range []string{`{"name":"nope","action":"stop"}`, `{"name":"dbzuper","action":"pause"}`} {
+		if rec := call(mux, "POST", "/api/apps/workers", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", body, rec.Code)
+		}
+	}
+
+	// A run whose exit never arrives.
+	workerStopWait = 50 * time.Millisecond
+	f.d.stopAppWorkers("dbzuper", true)
+	w := &worker{kind: "app-transfers", site: f.d.sites[0], gen: 99, state: workerRunning, pid: 0x7ffffff0, done: make(chan struct{})}
+	f.d.mu.Lock()
+	f.d.workers[workerKey("app-transfers", "dbzuper.test")] = w
+	f.d.mu.Unlock()
+	rec := call(mux, "POST", "/api/apps/workers", `{"name":"dbzuper","action":"stop"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "still stopping") {
+		t.Errorf("stuck stop: %d %s", rec.Code, rec.Body)
+	}
+	w.mu.Lock()
+	w.pid = 0
+	w.mu.Unlock()
+}

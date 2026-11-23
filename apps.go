@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"laman/internal/client"
 	"laman/internal/config"
@@ -162,6 +163,7 @@ func installApp(name string, update bool, from string) error {
 		From: from,
 		Out:  func(f string, a ...any) { fmt.Printf(f, a...) },
 	}
+	ctx.StopWorkers, ctx.StartWorkers = appWorkerHooks(name)
 	note, err := install.InstallApp(spec, latest, ctx)
 	if err != nil {
 		return err
@@ -194,6 +196,33 @@ func installApp(name string, update bool, from string) error {
 	return nil
 }
 
+// appWorkerHooks asks the running laman to stop an app's queue workers
+// (and keep them stopped) and later to release them. Without a daemon
+// there are no workers, so both do nothing.
+func appWorkerHooks(name string) (stop func() error, start func()) {
+	spec := install.AppByName(name)
+	ask := func(action string) error {
+		// A stop can wait about 10s for workers to exit, as long as Do's own limit.
+		_, err := client.DoWithin(30*time.Second, "POST", "/api/apps/workers", map[string]string{"name": name, "action": action})
+		return err
+	}
+	stop = func() error {
+		if !client.Running() {
+			return nil
+		}
+		return ask("stop")
+	}
+	start = func() {
+		if !client.Running() {
+			return
+		}
+		if err := ask("start"); err != nil {
+			fmt.Printf("Could not restart %s's workers: %v\n", spec.Title, err)
+		}
+	}
+	return stop, start
+}
+
 func removeApp(name string, yes bool) error {
 	spec := install.AppByName(name)
 	cfg, err := loadOrInit()
@@ -212,6 +241,12 @@ func removeApp(name string, yes bool) error {
 			return nil
 		}
 	}
+	// Its workers hold files open; stop them and keep them stopped.
+	stop, start := appWorkerHooks(name)
+	if err := stop(); err != nil {
+		return err
+	}
+	defer start() // releases the hold; the app is gone from the config, so nothing starts
 	delete(cfg.Apps, name)
 	delete(cfg.Isolated, name)
 	if cfg.DBClient == name {
