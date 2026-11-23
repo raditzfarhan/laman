@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,6 +34,10 @@ type AppSpec struct {
 	install func(dir, version string, c *AppCtx) error     // into an empty dir
 	keep    []string                                       // paths carried over on update
 	done    func(dir string, c *AppCtx, fresh bool) string // a note to show after install
+	// prepare runs in the staging folder after keep is carried over and
+	// before the swap, on updates only (a migration that needs the old
+	// data). If it fails the update is abandoned and the old install stays.
+	prepare func(dir string, c *AppCtx) error
 }
 
 // AppCtx is what a recipe needs from laman.
@@ -51,6 +56,11 @@ type AppCtx struct {
 	From string
 	Old  string // previous install when updating, else ""
 	Out  func(format string, a ...any)
+	// StopWorkers stops the app's background workers before an update
+	// touches its data; StartWorkers brings them back afterwards, whether
+	// the update worked or not. Both optional, updates only.
+	StopWorkers  func() error
+	StartWorkers func()
 }
 
 var AppCatalog = []*AppSpec{dbzuperApp, adminerApp, phpMyAdminApp, phpRedisAdminApp}
@@ -86,10 +96,28 @@ func InstallApp(spec *AppSpec, version string, c *AppCtx) (note string, err erro
 	}
 	fresh := c.Old == ""
 	if !fresh {
+		// Workers hold the app's database open; stop them before its files move.
+		if c.StopWorkers != nil {
+			if err := c.StopWorkers(); err != nil {
+				os.RemoveAll(staging)
+				return "", fmt.Errorf("stop %s's workers: %w", spec.Title, err)
+			}
+		}
+		if c.StartWorkers != nil {
+			defer c.StartWorkers()
+		}
 		for _, k := range spec.keep {
 			if err := carry(filepath.Join(dir, k), filepath.Join(staging, k)); err != nil {
 				os.RemoveAll(staging)
 				return "", fmt.Errorf("keep %s: %w", k, err)
+			}
+		}
+		if spec.prepare != nil {
+			if err := spec.prepare(staging, c); err != nil {
+				// Give the old install its data back before dropping staging.
+				err = errors.Join(err, uncarry(spec, dir, staging))
+				os.RemoveAll(staging)
+				return "", err
 			}
 		}
 		old := dir + ".old"
@@ -112,10 +140,30 @@ func InstallApp(spec *AppSpec, version string, c *AppCtx) (note string, err erro
 	return note, nil
 }
 
+// uncarry puts the kept paths back from staging into the old install,
+// undoing carry when an update is abandoned.
+func uncarry(spec *AppSpec, dir, staging string) error {
+	var errs []error
+	for _, k := range spec.keep {
+		if !exists(filepath.Join(staging, k)) {
+			continue
+		}
+		if err := carry(filepath.Join(staging, k), filepath.Join(dir, k)); err != nil {
+			errs = append(errs, fmt.Errorf("restore %s: %w", k, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // carry moves a file or folder from the old install into the new one,
 // replacing what the new one shipped.
 func carry(from, to string) error {
 	if !exists(from) {
+		// A SQLite sidecar the old install lacks must not survive from the
+		// new build, or it would pair with the carried database.
+		if base := filepath.Base(to); strings.HasSuffix(base, "-wal") || strings.HasSuffix(base, "-shm") {
+			os.RemoveAll(to)
+		}
 		return nil
 	}
 	os.RemoveAll(to)
