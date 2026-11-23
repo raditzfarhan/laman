@@ -32,7 +32,7 @@ type AppSpec struct {
 	PHP     string                                         `json:"php"`
 	latest  func() (string, error)                         // newest version on offer
 	install func(dir, version string, c *AppCtx) error     // into an empty dir
-	keep    []string                                       // paths carried over on update
+	keep    []string                                       // paths carried over on update (files copied, folders moved)
 	done    func(dir string, c *AppCtx, fresh bool) string // a note to show after install
 	// prepare runs in the staging folder after keep is carried over and
 	// before the swap, on updates only (a migration that needs the old
@@ -96,39 +96,48 @@ func InstallApp(spec *AppSpec, version string, c *AppCtx) (note string, err erro
 	}
 	fresh := c.Old == ""
 	if !fresh {
-		// Workers hold the app's database open; stop them before its files move.
+		// Workers hold the app's database open; stop them before its files
+		// move. Restart is deferred first so a stop that half worked still
+		// brings the rest back.
+		if c.StartWorkers != nil {
+			defer c.StartWorkers()
+		}
 		if c.StopWorkers != nil {
 			if err := c.StopWorkers(); err != nil {
 				os.RemoveAll(staging)
 				return "", fmt.Errorf("stop %s's workers: %w", spec.Title, err)
 			}
 		}
-		if c.StartWorkers != nil {
-			defer c.StartWorkers()
+		// abandon undoes the carry and drops staging, but never when that
+		// would delete the only copy of kept data.
+		abandon := func(err error) error {
+			if ue := uncarry(spec, dir, staging); ue != nil {
+				return errors.Join(err, fmt.Errorf("kept data could not be put back, it is in %s: %w", staging, ue))
+			}
+			os.RemoveAll(staging)
+			return err
 		}
 		for _, k := range spec.keep {
 			if err := carry(filepath.Join(dir, k), filepath.Join(staging, k)); err != nil {
-				os.RemoveAll(staging)
-				return "", fmt.Errorf("keep %s: %w", k, err)
+				return "", abandon(fmt.Errorf("keep %s: %w", k, err))
 			}
 		}
 		if spec.prepare != nil {
 			if err := spec.prepare(staging, c); err != nil {
-				// Give the old install its data back before dropping staging.
-				err = errors.Join(err, uncarry(spec, dir, staging))
-				os.RemoveAll(staging)
-				return "", err
+				return "", abandon(err)
 			}
 		}
 		old := dir + ".old"
 		os.RemoveAll(old)
 		if err := os.Rename(dir, old); err != nil {
-			os.RemoveAll(staging)
-			return "", fmt.Errorf("%w (is a file in %s open?)", err, dir)
+			return "", abandon(fmt.Errorf("%w (is a file in %s open?)", err, dir))
 		}
 		if err := os.Rename(staging, dir); err != nil {
-			os.Rename(old, dir) // put the working copy back
-			return "", err
+			// Put the working copy back, then any folders moved out of it.
+			if re := os.Rename(old, dir); re != nil {
+				return "", errors.Join(err, fmt.Errorf("could not restore %s from %s: %w", dir, old, re))
+			}
+			return "", abandon(err)
 		}
 		os.RemoveAll(old)
 	} else if err := os.Rename(staging, dir); err != nil {
@@ -140,25 +149,30 @@ func InstallApp(spec *AppSpec, version string, c *AppCtx) (note string, err erro
 	return note, nil
 }
 
-// uncarry puts the kept paths back from staging into the old install,
-// undoing carry when an update is abandoned.
+// uncarry undoes carry when an update is abandoned. Files were copied, so
+// the old install still has them; only folders, which were moved, go back.
 func uncarry(spec *AppSpec, dir, staging string) error {
 	var errs []error
 	for _, k := range spec.keep {
-		if !exists(filepath.Join(staging, k)) {
+		from, to := filepath.Join(staging, k), filepath.Join(dir, k)
+		if fi, err := os.Stat(from); err != nil || !fi.IsDir() || exists(to) {
 			continue
 		}
-		if err := carry(filepath.Join(staging, k), filepath.Join(dir, k)); err != nil {
+		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+			errs = append(errs, fmt.Errorf("restore %s: %w", k, err))
+		} else if err := os.Rename(from, to); err != nil {
 			errs = append(errs, fmt.Errorf("restore %s: %w", k, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// carry moves a file or folder from the old install into the new one,
-// replacing what the new one shipped.
+// carry brings a file or folder from the old install into the new one,
+// replacing what the new one shipped. Files are copied, so the old install
+// stays whole if the update is abandoned; folders are moved.
 func carry(from, to string) error {
-	if !exists(from) {
+	fi, err := os.Stat(from)
+	if err != nil {
 		// A SQLite sidecar the old install lacks must not survive from the
 		// new build, or it would pair with the carried database.
 		if base := filepath.Base(to); strings.HasSuffix(base, "-wal") || strings.HasSuffix(base, "-shm") {
@@ -167,10 +181,13 @@ func carry(from, to string) error {
 		return nil
 	}
 	os.RemoveAll(to)
-	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
-		return err
+	if fi.IsDir() {
+		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+			return err
+		}
+		return os.Rename(from, to)
 	}
-	return os.Rename(from, to)
+	return copyInto(from, to)
 }
 
 // RemoveApp deletes an app and everything it stored.

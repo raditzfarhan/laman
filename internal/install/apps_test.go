@@ -187,7 +187,7 @@ func TestInstallAppWorkerHooks(t *testing.T) {
 		}
 	}
 
-	dir := appHome(t, true)
+	appHome(t, true)
 	if _, err := InstallApp(record(nil), "1", ctx(nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -199,12 +199,12 @@ func TestInstallAppWorkerHooks(t *testing.T) {
 	}
 	want("prepare fails", "stop", "prepare", "start")
 
-	dir = appHome(t, true)
+	dir := appHome(t, true)
 	_, err := InstallApp(record(nil), "1", ctx(errors.New("stuck")))
 	if err == nil || !strings.Contains(err.Error(), "stuck") {
 		t.Fatalf("err = %v", err)
 	}
-	want("stop fails", "stop")
+	want("stop fails", "stop", "start")
 	if got := readFile(t, filepath.Join(dir, "app.txt")); got != "old" {
 		t.Errorf("app.txt = %q", got)
 	}
@@ -263,4 +263,50 @@ func TestInstallAppCarriesKeep(t *testing.T) {
 	if exists(filepath.Join(dir, "db.txt-wal")) {
 		t.Error("staging's db.txt-wal survived the update")
 	}
+}
+
+func TestInstallAppPrepareMutatesThenFailsLeavesOldData(t *testing.T) {
+	dir := appHome(t, true)
+	spec := fakeApp(func(d string, _ *AppCtx) error {
+		p := filepath.Join(d, "db.txt")
+		os.WriteFile(p, []byte(readFile(t, p)+"+half"), 0o644)
+		return errors.New("migrate failed")
+	})
+	if _, err := InstallApp(spec, "1", &AppCtx{}); err == nil {
+		t.Fatal("want error")
+	}
+	if got := readFile(t, filepath.Join(dir, "db.txt")); got != "old data" {
+		t.Errorf("db.txt = %q", got)
+	}
+	noSideDirs(t, dir)
+}
+
+func TestInstallAppCarryFailureRestoresFolders(t *testing.T) {
+	dir := appHome(t, true)
+	os.MkdirAll(filepath.Join(dir, "data"), 0o755)
+	os.WriteFile(filepath.Join(dir, "data", "f.txt"), []byte("kept"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sub", "x"), []byte("x"), 0o644)
+	spec := fakeApp(nil)
+	// "data" moves into staging first; "sub/x" then cannot be copied because
+	// the new build ships "sub" as a file.
+	spec.keep = []string{"data", "sub/x"}
+	inner := spec.install
+	spec.install = func(d, v string, c *AppCtx) error {
+		if err := inner(d, v, c); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(d, "sub"), []byte("file"), 0o644)
+	}
+	_, err := InstallApp(spec, "1", &AppCtx{})
+	if err == nil || !strings.Contains(err.Error(), "keep sub/x") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := readFile(t, filepath.Join(dir, "data", "f.txt")); got != "kept" {
+		t.Errorf("data/f.txt = %q", got)
+	}
+	if got := readFile(t, filepath.Join(dir, "app.txt")); got != "old" {
+		t.Errorf("app.txt = %q", got)
+	}
+	noSideDirs(t, dir)
 }
