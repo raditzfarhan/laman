@@ -175,11 +175,17 @@ func InstallApp(spec *AppSpec, version string, c *AppCtx) (note string, err erro
 
 // uncarry undoes carry when an update is abandoned. Files were copied, so
 // the old install still has them; only folders, which were moved, go back.
+// A folder the old install has made again meanwhile is not merged or
+// replaced: that is an error, so staging and the data in it are kept.
 func uncarry(spec *AppSpec, dir, staging string) error {
 	var errs []error
 	for _, k := range spec.keep {
 		from, to := filepath.Join(staging, k), filepath.Join(dir, k)
-		if fi, err := os.Stat(from); err != nil || !fi.IsDir() || exists(to) {
+		if fi, err := os.Stat(from); err != nil || !fi.IsDir() {
+			continue
+		}
+		if exists(to) {
+			errs = append(errs, fmt.Errorf("restore %s: %s exists again, the kept copy is in %s", k, to, from))
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {

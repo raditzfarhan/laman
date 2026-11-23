@@ -312,6 +312,30 @@ func TestInstallAppCarryFailureRestoresFolders(t *testing.T) {
 	noSideDirs(t, dir)
 }
 
+func TestInstallAppAbandonKeepsStagingWhenFolderRecreated(t *testing.T) {
+	dir := appHome(t, true)
+	os.MkdirAll(filepath.Join(dir, "data"), 0o755)
+	os.WriteFile(filepath.Join(dir, "data", "f.txt"), []byte("kept"), 0o644)
+	spec := fakeApp(func(string, *AppCtx) error {
+		// The old app, still served, makes the folder again meanwhile.
+		os.MkdirAll(filepath.Join(dir, "data"), 0o755)
+		os.WriteFile(filepath.Join(dir, "data", "new.txt"), []byte("recreated"), 0o644)
+		return errors.New("migrate failed")
+	})
+	spec.keep = []string{"data"}
+	_, err := InstallApp(spec, "1", &AppCtx{})
+	staging := dir + ".new"
+	if err == nil || !strings.Contains(err.Error(), "migrate failed") || !strings.Contains(err.Error(), staging) {
+		t.Fatalf("err = %v", err)
+	}
+	if got := readFile(t, filepath.Join(staging, "data", "f.txt")); got != "kept" {
+		t.Errorf("staging data/f.txt = %q", got)
+	}
+	if got := readFile(t, filepath.Join(dir, "app.txt")); got != "old" {
+		t.Errorf("app.txt = %q", got)
+	}
+}
+
 func TestDBZuperEnv(t *testing.T) {
 	want := map[string]string{
 		"APP_URL": "https://dbzuper.test", "APP_ENV": "production", "APP_DEBUG": "false", "LOG_LEVEL": "warning",
