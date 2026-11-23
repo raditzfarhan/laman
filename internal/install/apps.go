@@ -368,8 +368,7 @@ var dbzuperApp = &AppSpec{
 			// A local checkout (DBZuper development): its source, not its
 			// dependencies, build output, settings or data.
 			c.Out("Copying DBZuper from %s\n", c.From)
-			if err := copySource(c.From, dir, []string{".git", "vendor", "node_modules", ".env", "public/build", "public/hot",
-				"database/database.sqlite", "storage", "bootstrap/cache"}); err != nil {
+			if err := copySource(c.From, dir, dbzuperSourceSkip); err != nil {
 				return err
 			}
 			for _, d := range []string{"storage/app/private", "storage/framework/cache/data", "storage/framework/sessions",
@@ -448,6 +447,12 @@ var dbzuperApp = &AppSpec{
 	done:    dbzuperDone,
 	workers: dbzuperWorkers,
 }
+
+// dbzuperSourceSkip is what a --from install leaves out of a DBZuper
+// checkout. The checkout's -wal and -shm files are left out with its
+// database: beside the new install's empty database they would corrupt it.
+var dbzuperSourceSkip = []string{".git", "vendor", "node_modules", ".env", "public/build", "public/hot",
+	"database/database.sqlite", "database/database.sqlite-wal", "database/database.sqlite-shm", "storage", "bootstrap/cache"}
 
 // dbzuperWorkers lists DBZuper's queue workers, as its docs/self-hosting.md
 // runs them. The transfers worker is declared only when the install's queue

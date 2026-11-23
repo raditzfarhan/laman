@@ -336,6 +336,29 @@ func TestInstallAppAbandonKeepsStagingWhenFolderRecreated(t *testing.T) {
 	}
 }
 
+func TestDBZuperSourceSkipsData(t *testing.T) {
+	src, dest := t.TempDir(), t.TempDir()
+	for _, f := range []string{"artisan", "database/migrations/m.php", "database/database.sqlite",
+		"database/database.sqlite-wal", "database/database.sqlite-shm", ".env"} {
+		p := filepath.Join(src, filepath.FromSlash(f))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("x"), 0o644)
+	}
+	if err := copySource(src, dest, dbzuperSourceSkip); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"artisan", "database/migrations/m.php"} {
+		if !exists(filepath.Join(dest, filepath.FromSlash(f))) {
+			t.Errorf("%s not copied", f)
+		}
+	}
+	for _, f := range []string{"database/database.sqlite", "database/database.sqlite-wal", "database/database.sqlite-shm", ".env"} {
+		if exists(filepath.Join(dest, filepath.FromSlash(f))) {
+			t.Errorf("%s copied", f)
+		}
+	}
+}
+
 func TestDBZuperEnv(t *testing.T) {
 	want := map[string]string{
 		"APP_URL": "https://dbzuper.test", "APP_ENV": "production", "APP_DEBUG": "false", "LOG_LEVEL": "warning",
