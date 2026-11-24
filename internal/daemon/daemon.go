@@ -25,6 +25,7 @@ import (
 	"laman/internal/certs"
 	"laman/internal/client"
 	"laman/internal/config"
+	"laman/internal/desktop"
 	"laman/internal/hosts"
 	"laman/internal/install"
 	"laman/internal/laragon"
@@ -312,7 +313,7 @@ func (d *daemon) checkPorts() error {
 		}
 		for _, p := range o.ports {
 			if busy(p) {
-				note := fmt.Sprintf("%s is not running: port %d is already in use by another program (WSL, Docker or Laragon?). Stop that one and run `laman restart`, or change the port in config.json.", strings.SplitN(o.what, " (", 2)[0], p)
+				note := busyNote(strings.SplitN(o.what, " (", 2)[0], p)
 				logf("%s", note)
 				d.skipped = append(d.skipped, note)
 				*o.on = ""
@@ -323,11 +324,23 @@ func (d *daemon) checkPorts() error {
 	for _, w := range wants {
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", w.port))
 		if err != nil {
-			return fmt.Errorf("port %d for %s is already in use. Stop whatever holds it (Laragon?) or change it in %s", w.port, w.what, config.Path())
+			if who := desktop.DescribePortOwner(w.port); who != "" {
+				return fmt.Errorf("port %d for %s is already in use by %s. Or change the port in %s", w.port, w.what, who, config.Path())
+			}
+			return fmt.Errorf("port %d for %s is already in use by another program (WSL, Docker or Laragon?). Stop it or change the port in %s", w.port, w.what, config.Path())
 		}
 		ln.Close()
 	}
 	return nil
+}
+
+// busyNote explains why an add-on server was skipped, naming the program
+// that holds its port when Windows tells us.
+func busyNote(name string, port int) string {
+	if who := desktop.DescribePortOwner(port); who != "" {
+		return fmt.Sprintf("%s is not running: port %d is already in use by %s. Then run `laman restart`, or change the port in config.json.", name, port, who)
+	}
+	return fmt.Sprintf("%s is not running: port %d is already in use by another program (WSL, Docker or Laragon?). Stop that one and run `laman restart`, or change the port in config.json.", name, port)
 }
 
 // serviceOrder is the order add-on servers start and are listed in.

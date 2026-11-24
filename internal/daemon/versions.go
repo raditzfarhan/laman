@@ -191,7 +191,7 @@ func (d *daemon) switchServer(kind, v string) (string, error) {
 		return v, nil // switched while turned off: it stays off
 	}
 	if port := serverPort(d.cfg, kind); portBusy(port) {
-		note := fmt.Sprintf("%s is not running: port %d is already in use by another program (WSL, Docker or Laragon?). Stop that one and run `laman restart`, or change the port in config.json.", kindNames[kind], port)
+		note := busyNote(kindNames[kind], port)
 		d.mu.Lock()
 		d.skipped = append(d.skipped, note)
 		d.mu.Unlock()
@@ -512,7 +512,7 @@ func (d *daemon) startMailpit() error {
 	d.mu.Unlock()
 	for _, port := range []int{d.cfg.SMTPPort, d.cfg.MailUIPort} {
 		if portBusy(port) {
-			note := fmt.Sprintf("Mailpit is not running: port %d is already in use by another program (WSL, Docker or Laragon?). Stop that one and run `laman restart`, or change the port in config.json.", port)
+			note := busyNote("Mailpit", port)
 			d.mu.Lock()
 			d.skipped = append(d.skipped, note)
 			d.mu.Unlock()
