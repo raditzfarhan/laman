@@ -6,6 +6,7 @@ package tray
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -139,7 +140,37 @@ func (t *tray) runCLI(cmd string) {
 		t.note = cmd + " failed: " + lastLine(string(out))
 	}
 	t.mu.Unlock()
+	if err != nil && cmd != "hosts" { // hosts fails when the admin prompt is declined
+		alert(map[string]string{"start": "laman couldn't start", "stop": "laman couldn't stop",
+			"restart": "laman couldn't restart"}[cmd], alertText(string(out), err))
+	}
 	t.refresh()
+}
+
+// alert pops up a warning so a failed action can't pass unnoticed; the
+// menu's status line alone is easy to miss.
+var alert = func(title, text string) { go desktop.Alert(title, text) }
+
+// alertText turns `laman` CLI output into the message box body: the error
+// lines without "laman:" prefixes, repeats or the "failed to start" header.
+func alertText(out string, err error) string {
+	var lines []string
+	seen := map[string]bool{}
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		l = strings.TrimSpace(l)
+		for strings.HasPrefix(l, "laman:") {
+			l = strings.TrimSpace(strings.TrimPrefix(l, "laman:"))
+		}
+		if l == "" || seen[l] || l == "laman failed to start:" {
+			continue
+		}
+		seen[l] = true
+		lines = append(lines, l)
+	}
+	if len(lines) == 0 {
+		return err.Error()
+	}
+	return strings.Join(lines, "\n\n") + "\n\nThe full log is in " + filepath.Join(config.LogDir(), "laman.log")
 }
 
 func lastLine(s string) string {

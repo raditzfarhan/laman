@@ -129,6 +129,7 @@ func (t *tray) useVersion(kind, version string) {
 	t.note = ""
 	if err != nil {
 		t.note = "laman: " + strings.TrimSpace(err.Error())
+		alert("laman couldn't switch "+kind+"", strings.TrimSpace(err.Error()))
 	}
 	t.mu.Unlock()
 	t.refresh()

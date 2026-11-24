@@ -95,6 +95,7 @@ func (t *tray) setService(kind string, on bool) {
 	t.note = ""
 	if err != nil {
 		t.note = "laman: " + strings.TrimSpace(err.Error())
+		alert("laman couldn't change "+kind+"", strings.TrimSpace(err.Error()))
 	}
 	t.mu.Unlock()
 	t.refresh()
